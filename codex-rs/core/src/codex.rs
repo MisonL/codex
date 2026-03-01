@@ -55,7 +55,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
-use codex_hooks::CommandHookConfig;
 use codex_hooks::CommandHooksConfig;
 use codex_hooks::HookEvent;
 use codex_hooks::HookPayload;
@@ -133,24 +132,8 @@ use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
 
-fn legacy_notify_command_hooks(notify: Option<Vec<String>>) -> CommandHooksConfig {
-    let mut hooks = CommandHooksConfig::default();
-    let Some(command) = notify.filter(|argv| !argv.is_empty()) else {
-        return hooks;
-    };
-
-    let hook = CommandHookConfig {
-        name: Some("legacy-notify".to_string()),
-        command,
-        ..Default::default()
-    };
-    hooks.stop.push(hook.clone());
-    hooks.subagent_stop.push(hook);
-    hooks
-}
-
 fn command_hooks_for_config(config: &crate::config::Config) -> CommandHooksConfig {
-    let mut command_hooks =
+    let command_hooks =
         match crate::config::hooks::command_hooks_from_layer_stack(&config.config_layer_stack) {
             Ok(command_hooks) => command_hooks,
             Err(error) => {
@@ -158,11 +141,6 @@ fn command_hooks_for_config(config: &crate::config::Config) -> CommandHooksConfi
                 CommandHooksConfig::default()
             }
         };
-    let legacy_notify_hooks = legacy_notify_command_hooks(config.notify.clone());
-    command_hooks.stop.extend(legacy_notify_hooks.stop);
-    command_hooks
-        .subagent_stop
-        .extend(legacy_notify_hooks.subagent_stop);
     command_hooks
 }
 
@@ -4790,6 +4768,15 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
+        let current_snapshot = sess.services.shell_snapshot_tx.subscribe().borrow().clone();
+        if let Some(snapshot) = current_snapshot {
+            if let Err(err) = tokio::fs::remove_file(&snapshot.path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!("failed to remove shell snapshot after shutdown: {err}");
+            }
+        }
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
@@ -5242,6 +5229,14 @@ pub(crate) async fn run_turn(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        let sampling_request_input_messages = sampling_request_input
+            .iter()
+            .filter_map(|item| match parse_turn_item(item) {
+                Some(TurnItem::UserMessage(user_message)) => Some(user_message),
+                _ => None,
+            })
+            .map(|user_message| user_message.message())
+            .collect::<Vec<String>>();
 
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
@@ -5297,6 +5292,50 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
+                    if let Some(notify_argv) = turn_context
+                        .config
+                        .notify
+                        .as_ref()
+                        .filter(|argv| !argv.is_empty())
+                    {
+                        let payload = serde_json::json!({
+                            "type": "agent-turn-complete",
+                            "thread-id": sess.conversation_id.to_string(),
+                            "turn-id": turn_context.sub_id.clone(),
+                            "cwd": turn_context.cwd.display().to_string(),
+                            "client": turn_context.app_server_client_name.clone(),
+                            "input-messages": sampling_request_input_messages,
+                            "last-assistant-message": last_agent_message.clone(),
+                        });
+                        match serde_json::to_string(&payload) {
+                            Ok(payload_json) => {
+                                let mut command = tokio::process::Command::new(&notify_argv[0]);
+                                command.args(&notify_argv[1..]);
+                                command.arg(payload_json);
+                                if turn_context.cwd.is_dir() {
+                                    command.current_dir(&turn_context.cwd);
+                                }
+                                command
+                                    .stdin(std::process::Stdio::null())
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .kill_on_drop(false);
+                                match command.spawn() {
+                                    Ok(mut child) => {
+                                        tokio::spawn(async move {
+                                            let _ = child.wait().await;
+                                        });
+                                    }
+                                    Err(err) => {
+                                        warn!(turn_id = %turn_context.sub_id, %err, "notify failed; continuing");
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                warn!(turn_id = %turn_context.sub_id, %err, "notify payload serialization failed; continuing");
+                            }
+                        }
+                    }
                     let is_subagent_stop =
                         matches!(&turn_context.session_source, SessionSource::SubAgent(_));
                     let transcript_path = sess.transcript_path().await;

@@ -5,7 +5,6 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -1783,11 +1782,8 @@ fn build_agent_shared_config(
     Ok(config)
 }
 
-fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
+fn apply_spawn_agent_overrides(config: &mut Config, _child_depth: i32) {
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    if exceeds_thread_spawn_depth_limit(child_depth + 1, config.agent_max_depth) {
-        config.features.disable(Feature::Collab);
-    }
 }
 
 #[cfg(test)]

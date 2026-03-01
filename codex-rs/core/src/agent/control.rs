@@ -195,6 +195,16 @@ impl AgentControl {
         config: crate::config::Config,
         session_source: Option<SessionSource>,
     ) -> CodexResult<(ThreadId, Option<SessionSource>)> {
+        self.spawn_agent_thread_with_options(config, session_source, SpawnAgentOptions::default())
+            .await
+    }
+
+    pub(crate) async fn spawn_agent_thread_with_options(
+        &self,
+        config: crate::config::Config,
+        session_source: Option<SessionSource>,
+        options: SpawnAgentOptions,
+    ) -> CodexResult<(ThreadId, Option<SessionSource>)> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let session_source = match session_source {
@@ -218,9 +228,75 @@ impl AgentControl {
 
         let new_thread = match session_source {
             Some(session_source) => {
-                state
-                    .spawn_new_thread_with_source(config, self.clone(), session_source, false, None)
-                    .await?
+                if let Some(call_id) = options.fork_parent_spawn_call_id.as_ref() {
+                    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        ..
+                    }) = session_source.clone()
+                    else {
+                        return Err(CodexErr::Fatal(
+                            "spawn_agent fork requires a thread-spawn session source".to_string(),
+                        ));
+                    };
+                    let parent_thread = state.get_thread(parent_thread_id).await.ok();
+                    if let Some(parent_thread) = parent_thread.as_ref() {
+                        // `record_conversation_items` only queues rollout writes asynchronously.
+                        // Flush/materialize the live parent before snapshotting JSONL for a fork.
+                        parent_thread
+                            .codex
+                            .session
+                            .ensure_rollout_materialized()
+                            .await;
+                        parent_thread.codex.session.flush_rollout().await;
+                    }
+                    let rollout_path = parent_thread
+                        .as_ref()
+                        .and_then(|parent_thread| parent_thread.rollout_path())
+                        .or(find_thread_path_by_id_str(
+                            config.codex_home.as_path(),
+                            &parent_thread_id.to_string(),
+                        )
+                        .await?)
+                        .ok_or_else(|| {
+                            CodexErr::Fatal(format!(
+                                "parent thread rollout unavailable for fork: {parent_thread_id}"
+                            ))
+                        })?;
+                    let mut forked_rollout_items =
+                        RolloutRecorder::get_rollout_history(&rollout_path)
+                            .await?
+                            .get_rollout_items();
+                    let mut output = FunctionCallOutputPayload::from_text(
+                        FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
+                    );
+                    output.success = Some(true);
+                    forked_rollout_items.push(RolloutItem::ResponseItem(
+                        ResponseItem::FunctionCallOutput {
+                            call_id: call_id.clone(),
+                            output,
+                        },
+                    ));
+                    let initial_history = InitialHistory::Forked(forked_rollout_items);
+                    state
+                        .fork_thread_with_source(
+                            config,
+                            initial_history,
+                            self.clone(),
+                            session_source,
+                            false,
+                        )
+                        .await?
+                } else {
+                    state
+                        .spawn_new_thread_with_source(
+                            config,
+                            self.clone(),
+                            session_source,
+                            false,
+                            None,
+                        )
+                        .await?
+                }
             }
             None => state.spawn_new_thread(config, self.clone()).await?,
         };
