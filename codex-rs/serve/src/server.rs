@@ -804,6 +804,7 @@ mod tests {
                     developer_instructions: None,
                 },
             }),
+            realtime_active: None,
             effort: Some(ReasoningEffort::Low),
             summary: ReasoningSummaryConfig::Auto,
             user_instructions: None,
