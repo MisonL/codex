@@ -168,10 +168,7 @@
         "sendInput",
         "resumeAgent",
         "wait",
-        "closeAgent",
-        "spawnTeam",
-        "waitTeam",
-        "closeTeam"
+        "closeAgent"
       ],
       "type": "string"
     },
@@ -658,6 +655,10 @@
           "description": "Working directory captured for the thread.",
           "type": "string"
         },
+        "ephemeral": {
+          "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+          "type": "boolean"
+        },
         "gitInfo": {
           "anyOf": [
             {
@@ -727,6 +728,7 @@
         "cliVersion",
         "createdAt",
         "cwd",
+        "ephemeral",
         "id",
         "modelProvider",
         "preview",

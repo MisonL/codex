@@ -7,6 +7,8 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
@@ -115,17 +117,11 @@ use toml::Value as TomlValue;
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
-    let mut cfg = ConfigBuilder::default()
+    ConfigBuilder::default()
         .codex_home(codex_home.clone())
         .build()
         .await
-        .expect("config");
-
-    if cfg.model_provider.is_openai() {
-        cfg.model_provider.base_url = Some(DEFAULT_OPENAI_BASE_URL.to_string());
-    }
-
-    cfg
+        .expect("config")
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -757,8 +753,8 @@ async fn enter_with_only_remote_images_submits_user_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
+    let (items, summary) = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, summary, .. } => (items, summary),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
     assert_eq!(
@@ -767,6 +763,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
             image_url: remote_url.clone(),
         }]
     );
+    assert_eq!(summary, None);
     assert!(chat.remote_image_urls().is_empty());
 
     let mut user_cell = None;
@@ -1584,6 +1581,7 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -1708,6 +1706,7 @@ async fn make_chatwidget_manual(
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
+        startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
@@ -2333,7 +2332,10 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
     let event = rx.try_recv().expect("expected AppEvent");
     assert_matches!(
         event,
-        AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium)
+        } if model == "gpt-5.1-codex-max"
     );
 }
 
@@ -2453,7 +2455,7 @@ async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_overr
     );
 
     let popup = render_bottom_popup(&chat, 100);
-    assert!(popup.contains("built-in Plan default (no reasoning)"));
+    assert!(popup.contains("built-in Plan default (medium)"));
 }
 
 #[tokio::test]
@@ -2852,7 +2854,11 @@ async fn exec_approval_uses_approval_id_when_present() {
 
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(Op::ExecApproval { id, decision, .. }) = app_ev {
+        if let AppEvent::SubmitThreadOp {
+            op: Op::ExecApproval { id, decision, .. },
+            ..
+        } = app_ev
+        {
             assert_eq!(id, "approval-subcommand");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
@@ -4292,7 +4298,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.1-codex-mini default for Plan mode."),
+        plan_messages.contains("Model changed to gpt-5.1-codex-mini medium for Plan mode."),
         "expected Plan-mode model switch notice, got: {plan_messages:?}"
     );
 
@@ -4329,8 +4335,8 @@ async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_sam
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.is_empty(),
-        "expected no model-change notice in Plan mode, got: {plan_messages:?}"
+        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
     );
 }
 
@@ -4488,6 +4494,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -4537,6 +4544,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -4572,7 +4580,10 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     chat.set_reasoning_effort(None);
 
-    assert_eq!(chat.current_reasoning_effort(), None);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 
@@ -4879,20 +4890,6 @@ async fn slash_exit_requests_exit() {
     chat.dispatch_command(SlashCommand::Exit);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
-}
-
-#[tokio::test]
-async fn slash_remote_control_sets_flag_and_requests_exit() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    crate::take_remote_control_request();
-    chat.dispatch_command(SlashCommand::RemoteControl);
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
-    assert!(
-        crate::take_remote_control_request(),
-        "expected /remote-control to set the remote control request flag"
-    );
 }
 
 #[tokio::test]
@@ -6014,6 +6011,62 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("realtime_audio_selection_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_selection_popup_narrow_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 56);
+    assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_microphone_picker_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Microphone,
+        vec!["Built-in Mic".to_string(), "USB Mic".to_string()],
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("realtime_microphone_picker_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_picker_emits_persist_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Speaker,
+        vec!["Desk Speakers".to_string(), "Headphones".to_string()],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
+            kind: RealtimeAudioDeviceKind::Speaker,
+            name: Some(name),
+        }) if name == "Headphones"
+    );
+}
+
 #[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
@@ -6032,6 +6085,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -6300,6 +6354,7 @@ async fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
@@ -7586,10 +7641,14 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     // Approve via key press 'y'
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
-    // Expect a CodexOp with PatchApproval carrying the call id.
+    // Expect a thread-scoped PatchApproval op carrying the call id.
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
+        if let AppEvent::SubmitThreadOp {
+            op: Op::PatchApproval { id, decision },
+            ..
+        } = app_ev
+        {
             assert_eq!(id, "call-999");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
@@ -7620,16 +7679,16 @@ async fn apply_patch_full_flow_integration_like() {
         }),
     });
 
-    // 2) User approves via 'y' and App receives a CodexOp
+    // 2) User approves via 'y' and App receives a thread-scoped op
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     let mut maybe_op: Option<Op> = None;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(op) = app_ev {
+        if let AppEvent::SubmitThreadOp { op, .. } = app_ev {
             maybe_op = Some(op);
             break;
         }
     }
-    let op = maybe_op.expect("expected CodexOp after key press");
+    let op = maybe_op.expect("expected thread-scoped op after key press");
 
     // 3) App forwards to widget.submit_op, which pushes onto codex_op_tx
     chat.submit_op(op);

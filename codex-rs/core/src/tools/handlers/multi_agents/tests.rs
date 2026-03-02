@@ -109,7 +109,7 @@ fn list_worktree_paths(codex_home: &Path, lead_thread_id: ThreadId) -> Vec<PathB
 }
 
 #[test]
-fn team_member_names_formats_agent_type() {
+fn team_member_refs_formats_agent_type() {
     let typed_id = ThreadId::new();
     let blank_id = ThreadId::new();
     let none_id = ThreadId::new();
@@ -131,19 +131,42 @@ fn team_member_names_formats_agent_type() {
         },
     ];
 
-    let names = team_member_names(&members);
-    assert_eq!(names.len(), 3);
+    let refs = team_member_refs(&members);
+    assert_eq!(refs.len(), 3);
+
+    let typed = refs
+        .iter()
+        .find(|agent| agent.thread_id == typed_id)
+        .expect("typed member");
     assert_eq!(
-        names.get(&typed_id).map(std::string::String::as_str),
-        Some("typed [reviewer]")
+        typed.agent_nickname.as_deref(),
+        Some("typed"),
+        "typed member nickname"
     );
     assert_eq!(
-        names.get(&blank_id).map(std::string::String::as_str),
-        Some("blank [default]")
+        typed.agent_role.as_deref(),
+        Some("reviewer"),
+        "typed member role"
     );
+
+    let blank = refs
+        .iter()
+        .find(|agent| agent.thread_id == blank_id)
+        .expect("blank member");
     assert_eq!(
-        names.get(&none_id).map(std::string::String::as_str),
-        Some("none [default]")
+        blank.agent_role.as_deref(),
+        Some("default"),
+        "blank member defaults role"
+    );
+
+    let none = refs
+        .iter()
+        .find(|agent| agent.thread_id == none_id)
+        .expect("none member");
+    assert_eq!(
+        none.agent_role.as_deref(),
+        Some("default"),
+        "none member defaults role"
     );
 }
 
@@ -4861,7 +4884,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.clone();
     expected.model_reasoning_effort = turn.reasoning_effort;
-    expected.model_reasoning_summary = turn.reasoning_summary;
+    expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
@@ -4910,7 +4933,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.clone();
     expected.model_reasoning_effort = turn.reasoning_effort;
-    expected.model_reasoning_summary = turn.reasoning_summary;
+    expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();

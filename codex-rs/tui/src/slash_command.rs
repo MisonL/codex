@@ -30,8 +30,7 @@ pub enum SlashCommand {
     Compact,
     Plan,
     Collab,
-    #[strum(serialize = "agents", serialize = "agent")]
-    Agents,
+    Agent,
     // Undo,
     Diff,
     Copy,
@@ -43,8 +42,6 @@ pub enum SlashCommand {
     Mcp,
     Apps,
     Logout,
-    #[strum(serialize = "remote-control", serialize = "rc")]
-    RemoteControl,
     Quit,
     Exit,
     Feedback,
@@ -54,6 +51,7 @@ pub enum SlashCommand {
     Clear,
     Personality,
     Realtime,
+    Settings,
     TestApproval,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
@@ -73,12 +71,11 @@ impl SlashCommand {
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
-            SlashCommand::RemoteControl => "enable remote access from web/mobile",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
-            SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Copy => "copy the latest Codex output to your clipboard",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
@@ -93,9 +90,10 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
+            SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
-            SlashCommand::Agents => "manage agent threads (/agents switch|tasks)",
+            SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -125,7 +123,6 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::SandboxReadRoot
-                | SlashCommand::Agents
         )
     }
 
@@ -147,15 +144,13 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
-            | SlashCommand::RemoteControl
+            | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate
-            | SlashCommand::Clear
-            | SlashCommand::Theme => false,
+            | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
-            | SlashCommand::Rename
             | SlashCommand::Copy
+            | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
@@ -169,17 +164,19 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
-            SlashCommand::Collab => true,
-            SlashCommand::Agents => true,
             SlashCommand::Realtime => true,
+            SlashCommand::Settings => true,
+            SlashCommand::Collab => true,
+            SlashCommand::Agent => true,
             SlashCommand::Statusline => false,
+            SlashCommand::Theme => false,
         }
     }
 
     fn is_visible(self) -> bool {
         match self {
-            SlashCommand::Copy => !cfg!(target_os = "android"),
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
+            SlashCommand::Copy => !cfg!(target_os = "android"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }
@@ -192,56 +189,4 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use super::*;
-
-    #[test]
-    fn agents_aliases_parse_to_same_command() {
-        assert_eq!(
-            SlashCommand::from_str("agents").expect("agents should parse"),
-            SlashCommand::Agents
-        );
-        assert_eq!(
-            SlashCommand::from_str("agent").expect("agent should parse as alias"),
-            SlashCommand::Agents
-        );
-    }
-
-    #[test]
-    fn agents_entry_exposed_in_built_in_commands() {
-        let commands = built_in_slash_commands();
-        assert!(
-            commands
-                .iter()
-                .any(|(name, command)| *name == "agents" && *command == SlashCommand::Agents)
-        );
-    }
-
-    #[test]
-    fn agents_command_supports_inline_args_and_task_time_usage() {
-        assert!(SlashCommand::Agents.supports_inline_args());
-        assert!(SlashCommand::Agents.available_during_task());
-    }
-
-    #[test]
-    fn remote_control_aliases_parse_to_same_command() {
-        assert_eq!(
-            SlashCommand::from_str("remote-control").expect("remote-control should parse"),
-            SlashCommand::RemoteControl
-        );
-        assert_eq!(
-            SlashCommand::from_str("rc").expect("rc should parse as alias"),
-            SlashCommand::RemoteControl
-        );
-    }
-
-    #[test]
-    fn remote_control_command_disabled_during_task() {
-        assert!(!SlashCommand::RemoteControl.available_during_task());
-    }
 }

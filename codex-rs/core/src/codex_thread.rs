@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
+use crate::config::ConstraintResult;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::WatchRegistration;
@@ -29,6 +30,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub cwd: PathBuf,
+    pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
@@ -67,6 +69,15 @@ impl CodexThread {
         self.codex.steer_input(input, expected_turn_id).await
     }
 
+    pub async fn set_app_server_client_name(
+        &self,
+        app_server_client_name: Option<String>,
+    ) -> ConstraintResult<()> {
+        self.codex
+            .set_app_server_client_name(app_server_client_name)
+            .await
+    }
+
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.codex.submit_with_id(sub).await
@@ -88,9 +99,10 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    async fn inject_message_without_turn(&self, role: &str, message: String) {
+    /// Records a user-role session-prefix message without creating a new user turn boundary.
+    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
         let pending_item = ResponseInputItem::Message {
-            role: role.to_string(),
+            role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
         };
         let pending_items = vec![pending_item];
@@ -114,14 +126,30 @@ impl CodexThread {
             .await;
     }
 
-    /// Records a user-role session-prefix message without creating a new user turn boundary.
-    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
-        self.inject_message_without_turn("user", message).await;
-    }
-
-    /// Records a developer-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_developer_message_without_turn(&self, message: String) {
-        self.inject_message_without_turn("developer", message).await;
+        let pending_item = ResponseInputItem::Message {
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText { text: message }],
+        };
+        let pending_items = vec![pending_item];
+        let Err(items_without_active_turn) = self
+            .codex
+            .session
+            .inject_response_items(pending_items)
+            .await
+        else {
+            return;
+        };
+
+        let turn_context = self.codex.session.new_default_turn().await;
+        let items: Vec<ResponseItem> = items_without_active_turn
+            .into_iter()
+            .map(ResponseItem::from)
+            .collect();
+        self.codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &items)
+            .await;
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {

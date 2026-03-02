@@ -79,7 +79,7 @@ pub async fn handle(
     }
 
     let event_call_id = prefixed_team_call_id(TEAM_CLOSE_CALL_PREFIX, &call_id);
-    let receiver_names = team_member_names(&selected_members);
+    let receiver_agents = team_member_refs(&selected_members);
     session
         .send_event(
             &turn,
@@ -89,8 +89,7 @@ pub async fn handle(
                     .iter()
                     .map(|member| member.agent_id)
                     .collect(),
-                receiver_agents: Vec::new(),
-                receiver_names: receiver_names.clone(),
+                receiver_agents: receiver_agents.clone(),
                 call_id: event_call_id.clone(),
             }
             .into(),
@@ -207,15 +206,15 @@ pub async fn handle(
         }
     };
 
+    let agent_statuses = team_member_status_entries(&selected_members, &statuses);
     session
         .send_event(
             &turn,
             CollabWaitingEndEvent {
                 sender_thread_id: session.conversation_id,
                 call_id: event_call_id,
-                agent_statuses: Vec::new(),
+                agent_statuses,
                 statuses,
-                receiver_names,
             }
             .into(),
         )

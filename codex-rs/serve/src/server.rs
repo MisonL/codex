@@ -789,6 +789,8 @@ mod tests {
         let ctx = TurnContextItem {
             turn_id: None,
             cwd: PathBuf::from("/tmp"),
+            current_date: None,
+            timezone: None,
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             network: None,
@@ -1936,7 +1938,7 @@ async fn handle_post_message(
             sandbox_policy,
             model: guard.model.clone(),
             effort: guard.reasoning_effort,
-            summary: ReasoningSummaryConfig::Auto,
+            summary: Some(ReasoningSummaryConfig::Auto),
             final_output_json_schema: None,
             collaboration_mode,
             personality: None,
@@ -2853,7 +2855,8 @@ async fn terminal_ws_loop(
                                     let _ = session.writer_sender().send(data.into_bytes()).await;
                                 }
                                 TerminalClientMessage::Resize { cols, rows } => {
-                                    let _ = session.resize(cols, rows);
+                                    // codex-utils-pty intentionally does not expose a resize API.
+                                    let _ = (cols, rows);
                                 }
                             }
                         }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::role::apply_role_to_config;
 
+use crate::agent::control::SpawnAgentOptions;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use std::sync::Arc;
@@ -12,6 +13,8 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model_provider: Option<String>,
     model: Option<String>,
+    #[serde(default)]
+    fork_context: bool,
     #[serde(default)]
     worktree: bool,
     #[serde(default, alias = "backendground")]
@@ -59,6 +62,8 @@ pub async fn handle(
             .into(),
         )
         .await;
+    let thread_spawn_session_source =
+        Some(thread_spawn_source(session.conversation_id, child_depth));
     let mut config = build_agent_spawn_config(
         &session.get_base_instructions().await,
         turn.as_ref(),
@@ -100,9 +105,12 @@ pub async fn handle(
     let spawn_result = session
         .services
         .agent_control
-        .spawn_agent_thread(
+        .spawn_agent_thread_with_options(
             config.clone(),
-            Some(thread_spawn_source(session.conversation_id, child_depth)),
+            thread_spawn_session_source,
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+            },
         )
         .await;
     let result = match spawn_result {

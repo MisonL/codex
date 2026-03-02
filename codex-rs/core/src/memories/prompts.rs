@@ -12,8 +12,11 @@ use tokio::fs;
 
 const CONSOLIDATION_PROMPT_TEMPLATE: &str =
     include_str!("../../templates/memories/consolidation.md");
+
 const STAGE_ONE_INPUT_TEMPLATE: &str = include_str!("../../templates/memories/stage_one_input.md");
-const READ_PATH_TEMPLATE: &str = include_str!("../../templates/memories/read_path.md");
+
+const MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
+    include_str!("../../templates/memories/read_path.md");
 
 /// Builds the consolidation subagent prompt for a specific memory root.
 pub(super) fn build_consolidation_prompt(
@@ -22,9 +25,9 @@ pub(super) fn build_consolidation_prompt(
 ) -> String {
     let memory_root = memory_root.display().to_string();
     let phase2_input_selection = render_phase2_input_selection(selection);
-    CONSOLIDATION_PROMPT_TEMPLATE
-        .replace("{{ memory_root }}", &memory_root)
-        .replace("{{ phase2_input_selection }}", &phase2_input_selection)
+    let mut rendered = CONSOLIDATION_PROMPT_TEMPLATE.replace("{{ memory_root }}", &memory_root);
+    rendered = rendered.replace("{{ phase2_input_selection }}", &phase2_input_selection);
+    rendered
 }
 
 fn render_phase2_input_selection(selection: &Phase2InputSelection) -> String {
@@ -118,10 +121,10 @@ pub(super) fn build_stage_one_input_message(
 
     let rollout_path = rollout_path.display().to_string();
     let rollout_cwd = rollout_cwd.display().to_string();
-    Ok(STAGE_ONE_INPUT_TEMPLATE
-        .replace("{{ rollout_path }}", &rollout_path)
-        .replace("{{ rollout_cwd }}", &rollout_cwd)
-        .replace("{{ rollout_contents }}", &truncated_rollout_contents))
+    let mut rendered = STAGE_ONE_INPUT_TEMPLATE.replace("{{ rollout_path }}", &rollout_path);
+    rendered = rendered.replace("{{ rollout_cwd }}", &rollout_cwd);
+    rendered = rendered.replace("{{ rollout_contents }}", &truncated_rollout_contents);
+    Ok(rendered)
 }
 
 /// Build prompt used for read path. This prompt must be added to the developer instructions. In
@@ -143,11 +146,10 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
         return None;
     }
     let base_path = base_path.display().to_string();
-    Some(
-        READ_PATH_TEMPLATE
-            .replace("{{ base_path }}", &base_path)
-            .replace("{{ memory_summary }}", &memory_summary),
-    )
+    let mut rendered =
+        MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE.replace("{{ base_path }}", &base_path);
+    rendered = rendered.replace("{{ memory_summary }}", &memory_summary);
+    Some(rendered)
 }
 
 #[cfg(test)]

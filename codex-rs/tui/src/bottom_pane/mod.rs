@@ -298,6 +298,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
+        self.composer.set_audio_device_selection_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
         self.composer.set_voice_transcription_enabled(enabled);
         self.request_redraw();
@@ -760,6 +765,18 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the inactive-thread approval list shown above the composer.
+    pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
+        if self.pending_thread_approvals.set_threads(threads) {
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_thread_approvals(&self) -> &[String] {
+        self.pending_thread_approvals.threads()
+    }
+
     /// Update the unified-exec process set and refresh whichever summary surface is active.
     ///
     /// The summary may be displayed inline in the status row or as a dedicated
@@ -793,6 +810,11 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_active_view(&self) -> bool {
+        !self.view_stack.is_empty()
     }
 
     /// Return true when the pane is in the regular composer state without any
@@ -1098,6 +1120,8 @@ mod tests {
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
+            thread_id: codex_protocol::ThreadId::new(),
+            thread_label: None,
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,

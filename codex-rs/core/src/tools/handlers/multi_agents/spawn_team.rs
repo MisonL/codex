@@ -93,7 +93,6 @@ pub async fn handle(
                 sender_thread_id: session.conversation_id,
                 receiver_thread_ids: Vec::new(),
                 receiver_agents: Vec::new(),
-                receiver_names: HashMap::new(),
                 call_id: event_call_id.clone(),
             }
             .into(),
@@ -134,15 +133,15 @@ pub async fn handle(
                 }
                 Err(err) => {
                     cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
+                    let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
                     session
                         .send_event(
                             &turn,
                             CollabWaitingEndEvent {
                                 sender_thread_id: session.conversation_id,
                                 call_id: event_call_id,
-                                agent_statuses: Vec::new(),
+                                agent_statuses,
                                 statuses,
-                                receiver_names: team_member_names(&spawned_members),
                             }
                             .into(),
                         )
@@ -193,15 +192,15 @@ pub async fn handle(
                     let _ = remove_worktree_lease(&session, &turn, lease).await;
                 }
                 cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
+                let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
                 session
                     .send_event(
                         &turn,
                         CollabWaitingEndEvent {
                             sender_thread_id: session.conversation_id,
                             call_id: event_call_id,
-                            agent_statuses: Vec::new(),
+                            agent_statuses,
                             statuses,
-                            receiver_names: team_member_names(&spawned_members),
                         }
                         .into(),
                     )
@@ -244,15 +243,15 @@ pub async fn handle(
                 .shutdown_agent(agent_id)
                 .await;
             cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
+            let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
             session
                 .send_event(
                     &turn,
                     CollabWaitingEndEvent {
                         sender_thread_id: session.conversation_id,
                         call_id: event_call_id,
-                        agent_statuses: Vec::new(),
+                        agent_statuses,
                         statuses,
-                        receiver_names: team_member_names(&spawned_members),
                     }
                     .into(),
                 )
@@ -286,15 +285,15 @@ pub async fn handle(
         team_record.clone(),
     ) {
         cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
+        let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
         session
             .send_event(
                 &turn,
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id: event_call_id,
-                    agent_statuses: Vec::new(),
+                    agent_statuses,
                     statuses,
-                    receiver_names: team_member_names(&spawned_members),
                 }
                 .into(),
             )
@@ -314,15 +313,15 @@ pub async fn handle(
         let _ = remove_team_record(session.conversation_id, &team_id);
         let _ = remove_team_persistence(turn.config.codex_home.as_path(), &team_id).await;
         cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
+        let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
         session
             .send_event(
                 &turn,
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id: event_call_id,
-                    agent_statuses: Vec::new(),
+                    agent_statuses,
                     statuses,
-                    receiver_names: team_member_names(&spawned_members),
                 }
                 .into(),
             )
@@ -330,15 +329,15 @@ pub async fn handle(
         return Err(err);
     }
 
+    let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
     session
         .send_event(
             &turn,
             CollabWaitingEndEvent {
                 sender_thread_id: session.conversation_id,
                 call_id: event_call_id,
-                agent_statuses: Vec::new(),
+                agent_statuses,
                 statuses: statuses.clone(),
-                receiver_names: team_member_names(&spawned_members),
             }
             .into(),
         )

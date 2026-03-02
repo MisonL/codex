@@ -84,8 +84,7 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
-        let include_sqlite = features.enabled(Feature::Sqlite);
-        let include_agent_jobs = include_collab_tools && include_sqlite;
+        let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
@@ -121,7 +120,7 @@ impl ToolsConfig {
             }
         };
 
-        let agent_jobs_worker_tools = include_sqlite
+        let agent_jobs_worker_tools = include_agent_jobs
             && matches!(
                 session_source,
                 SessionSource::SubAgent(SubAgentSource::Other(label))
@@ -635,32 +634,11 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
         (
-            "model_provider".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional model provider id override for this agent.".to_string(),
-                ),
-            },
-        ),
-        (
-            "model".to_string(),
-            JsonSchema::String {
-                description: Some("Optional model override for this agent.".to_string()),
-            },
-        ),
-        (
-            "worktree".to_string(),
+            "fork_context".to_string(),
             JsonSchema::Boolean {
                 description: Some(
-                    "When true, spawn this agent in a dedicated git worktree.".to_string(),
-                ),
-            },
-        ),
-        (
-            "background".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, mark this agent as background work (informational) and auto-close it once it reaches a final status.".to_string(),
+                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                        .to_string(),
                 ),
             },
         ),
@@ -669,7 +647,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description:
-            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent."
+            "Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1037,9 +1015,7 @@ fn create_spawn_team_tool(config: &ToolsConfig) -> ToolSpec {
         (
             "model_provider".to_string(),
             JsonSchema::String {
-                description: Some(
-                    "Optional model provider id override for this member.".to_string(),
-                ),
+                description: Some("Optional model provider id override for this member.".to_string()),
             },
         ),
         (
@@ -1092,9 +1068,7 @@ fn create_spawn_team_tool(config: &ToolsConfig) -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_team".to_string(),
-        description:
-            "Spawn a group of sub-agents for parallel task execution and register them under a team id. Choose member count based on task complexity; there is no fixed default team size."
-                .to_string(),
+        description: "Spawn a group of sub-agents for parallel task execution and register them under a team id. Choose member count based on task complexity; there is no fixed default team size.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1354,8 +1328,7 @@ fn create_team_broadcast_tool() -> ToolSpec {
             "interrupt".to_string(),
             JsonSchema::Boolean {
                 description: Some(
-                    "When true, stop each member's current task before sending input."
-                        .to_string(),
+                    "When true, stop each member's current task before sending input.".to_string(),
                 ),
             },
         ),
@@ -1482,8 +1455,7 @@ fn create_team_cleanup_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "team_cleanup".to_string(),
-        description: "Remove shared team resources (team config, tasks, inbox). Must be run by the lead and fails if any teammates are still running; shut them down first with close_team."
-            .to_string(),
+        description: "Remove shared team resources (team config, tasks, inbox). Must be run by the lead and fails if any teammates are still running; shut them down first with close_team.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -2365,12 +2337,10 @@ pub(crate) fn build_specs(
         builder.register_handler("team_cleanup", multi_agent_handler);
     }
 
-    if config.agent_jobs_tools || config.agent_jobs_worker_tools {
+    if config.agent_jobs_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
-        if config.agent_jobs_tools {
-            builder.push_spec(create_spawn_agents_on_csv_tool());
-            builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
-        }
+        builder.push_spec(create_spawn_agents_on_csv_tool());
+        builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
         if config.agent_jobs_worker_tools {
             builder.push_spec(create_report_agent_job_result_tool());
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
@@ -2648,7 +2618,6 @@ mod tests {
                 "send_input",
                 "wait",
                 "close_agent",
-                "spawn_team",
                 "spawn_agents_on_csv",
             ],
         );

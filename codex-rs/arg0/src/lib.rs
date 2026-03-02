@@ -179,8 +179,6 @@ where
 fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     builder.enable_all();
-    // Defensive hardening: some startup and tool execution paths are stack-heavy.
-    // Use a larger worker stack to avoid runtime stack overflows on all platforms.
     builder.thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES);
     Ok(builder.build()?)
 }

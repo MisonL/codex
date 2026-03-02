@@ -40,7 +40,6 @@ pub async fn handle(
                 sender_thread_id: session.conversation_id,
                 receiver_thread_ids: receiver_thread_ids.clone(),
                 receiver_agents: Vec::new(),
-                receiver_names: HashMap::new(),
                 call_id: call_id.clone(),
             }
             .into(),
@@ -67,7 +66,6 @@ pub async fn handle(
                         call_id: call_id.clone(),
                         agent_statuses: Vec::new(),
                         statuses,
-                        receiver_names: HashMap::new(),
                     }
                     .into(),
                 )
@@ -96,7 +94,6 @@ pub async fn handle(
                 call_id,
                 agent_statuses: Vec::new(),
                 statuses: statuses_map,
-                receiver_names: HashMap::new(),
             }
             .into(),
         )

@@ -5,7 +5,6 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -23,8 +22,10 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -867,17 +868,47 @@ fn prefixed_team_call_id(prefix: &str, call_id: &str) -> String {
     format!("{prefix}{call_id}")
 }
 
-fn team_member_names(members: &[TeamMember]) -> HashMap<ThreadId, String> {
+fn team_member_refs(members: &[TeamMember]) -> Vec<CollabAgentRef> {
     members
         .iter()
-        .map(|member| {
-            let agent_type = member
-                .agent_type
-                .as_deref()
-                .map(str::trim)
-                .filter(|agent_type| !agent_type.is_empty())
-                .unwrap_or("default");
-            (member.agent_id, format!("{} [{agent_type}]", member.name))
+        .map(|member| CollabAgentRef {
+            thread_id: member.agent_id,
+            agent_nickname: Some(member.name.clone()),
+            agent_role: Some(
+                member
+                    .agent_type
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|agent_type| !agent_type.is_empty())
+                    .unwrap_or("default")
+                    .to_string(),
+            ),
+        })
+        .collect()
+}
+
+fn team_member_status_entries(
+    members: &[TeamMember],
+    statuses: &HashMap<ThreadId, AgentStatus>,
+) -> Vec<CollabAgentStatusEntry> {
+    members
+        .iter()
+        .map(|member| CollabAgentStatusEntry {
+            thread_id: member.agent_id,
+            agent_nickname: Some(member.name.clone()),
+            agent_role: Some(
+                member
+                    .agent_type
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|agent_type| !agent_type.is_empty())
+                    .unwrap_or("default")
+                    .to_string(),
+            ),
+            status: statuses
+                .get(&member.agent_id)
+                .cloned()
+                .unwrap_or(AgentStatus::NotFound),
         })
         .collect()
 }
@@ -1733,7 +1764,7 @@ fn build_agent_shared_config(
     config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.clone();
     config.model_reasoning_effort = turn.reasoning_effort;
-    config.model_reasoning_summary = turn.reasoning_summary;
+    config.model_reasoning_summary = Some(turn.reasoning_summary);
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
@@ -1751,11 +1782,8 @@ fn build_agent_shared_config(
     Ok(config)
 }
 
-fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
+fn apply_spawn_agent_overrides(config: &mut Config, _child_depth: i32) {
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    if exceeds_thread_spawn_depth_limit(child_depth + 1, config.agent_max_depth) {
-        config.features.disable(Feature::Collab);
-    }
 }
 
 #[cfg(test)]

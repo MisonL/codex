@@ -20,7 +20,6 @@ impl PendingThreadApprovals {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn set_threads(&mut self, threads: Vec<String>) -> bool {
         if self.threads == threads {
             return false;
@@ -31,6 +30,11 @@ impl PendingThreadApprovals {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.threads.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn threads(&self) -> &[String] {
+        &self.threads
     }
 
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {

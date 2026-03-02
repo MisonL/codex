@@ -120,13 +120,13 @@ impl ShellSnapshot {
             ShellType::PowerShell => "ps1",
             _ => "sh",
         };
+        let path = codex_home
+            .join(SNAPSHOT_DIR)
+            .join(format!("{session_id}.{extension}"));
         let nonce = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let path = codex_home
-            .join(SNAPSHOT_DIR)
-            .join(format!("{session_id}__{nonce}.{extension}"));
         let temp_path = codex_home
             .join(SNAPSHOT_DIR)
             .join(format!("{session_id}.tmp-{nonce}"));
@@ -177,17 +177,6 @@ impl ShellSnapshot {
             path,
             cwd: session_cwd.to_path_buf(),
         })
-    }
-}
-
-impl Drop for ShellSnapshot {
-    fn drop(&mut self) {
-        if let Err(err) = std::fs::remove_file(&self.path) {
-            tracing::warn!(
-                "Failed to delete shell snapshot at {:?}: {err:?}",
-                self.path
-            );
-        }
     }
 }
 
@@ -499,14 +488,13 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: Threa
 
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        let (stem, _) = match file_name.rsplit_once('.') {
+        let (session_id, _) = match file_name.rsplit_once('.') {
             Some((stem, ext)) => (stem, ext),
             None => {
                 remove_snapshot_file(&path).await;
                 continue;
             }
         };
-        let session_id = stem.split_once("__").map_or(stem, |(id, _)| id);
         if session_id == active_session_id {
             continue;
         }
@@ -674,7 +662,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
+    async fn try_new_refresh_does_not_delete_latest_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
         let shell = Shell {
             shell_type: ShellType::Bash,
@@ -682,53 +670,25 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), dir.path(), &shell)
-            .await
-            .expect("snapshot should be created");
-        let path = snapshot.path.clone();
-        assert!(path.exists());
-        assert_eq!(snapshot.cwd, dir.path().to_path_buf());
-
-        drop(snapshot);
-
-        assert!(!path.exists());
-
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn refreshed_snapshot_does_not_delete_new_snapshot_file() -> Result<()> {
-        let dir = tempdir()?;
-        let shell = Shell {
-            shell_type: ShellType::Bash,
-            shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        };
         let session_id = ThreadId::new();
-
         let snapshot_1 = ShellSnapshot::try_new(dir.path(), session_id, dir.path(), &shell)
             .await
             .expect("snapshot should be created");
-        let path_1 = snapshot_1.path.clone();
-        assert!(path_1.exists());
+        let path = snapshot_1.path.clone();
+        assert!(path.exists());
+        assert_eq!(snapshot_1.cwd, dir.path().to_path_buf());
 
         let snapshot_2 = ShellSnapshot::try_new(dir.path(), session_id, dir.path(), &shell)
             .await
             .expect("snapshot should be created");
-        let path_2 = snapshot_2.path.clone();
-        assert!(path_2.exists());
+        assert_eq!(snapshot_2.path, path);
 
         drop(snapshot_1);
 
         assert!(
-            path_2.exists(),
+            path.exists(),
             "new snapshot should not be removed by previous snapshot drop"
         );
-
-        drop(snapshot_2);
-
-        assert_eq!(path_2.exists(), false);
 
         Ok(())
     }
@@ -876,24 +836,18 @@ mod tests {
         let live_session = ThreadId::new();
         let orphan_session = ThreadId::new();
         let live_snapshot = snapshot_dir.join(format!("{live_session}.sh"));
-        let live_snapshot_nonce = snapshot_dir.join(format!("{live_session}__1.sh"));
         let orphan_snapshot = snapshot_dir.join(format!("{orphan_session}.sh"));
-        let orphan_snapshot_nonce = snapshot_dir.join(format!("{orphan_session}__1.sh"));
         let invalid_snapshot = snapshot_dir.join("not-a-snapshot.txt");
 
         write_rollout_stub(codex_home, live_session).await?;
         fs::write(&live_snapshot, "live").await?;
-        fs::write(&live_snapshot_nonce, "live").await?;
         fs::write(&orphan_snapshot, "orphan").await?;
-        fs::write(&orphan_snapshot_nonce, "orphan").await?;
         fs::write(&invalid_snapshot, "invalid").await?;
 
         cleanup_stale_snapshots(codex_home, ThreadId::new()).await?;
 
         assert_eq!(live_snapshot.exists(), true);
-        assert_eq!(live_snapshot_nonce.exists(), true);
         assert_eq!(orphan_snapshot.exists(), false);
-        assert_eq!(orphan_snapshot_nonce.exists(), false);
         assert_eq!(invalid_snapshot.exists(), false);
         Ok(())
     }
@@ -908,17 +862,14 @@ mod tests {
 
         let stale_session = ThreadId::new();
         let stale_snapshot = snapshot_dir.join(format!("{stale_session}.sh"));
-        let stale_snapshot_nonce = snapshot_dir.join(format!("{stale_session}__1.sh"));
         let rollout_path = write_rollout_stub(codex_home, stale_session).await?;
         fs::write(&stale_snapshot, "stale").await?;
-        fs::write(&stale_snapshot_nonce, "stale").await?;
 
         set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
         cleanup_stale_snapshots(codex_home, ThreadId::new()).await?;
 
         assert_eq!(stale_snapshot.exists(), false);
-        assert_eq!(stale_snapshot_nonce.exists(), false);
         Ok(())
     }
 
@@ -932,17 +883,14 @@ mod tests {
 
         let active_session = ThreadId::new();
         let active_snapshot = snapshot_dir.join(format!("{active_session}.sh"));
-        let active_snapshot_nonce = snapshot_dir.join(format!("{active_session}__1.sh"));
         let rollout_path = write_rollout_stub(codex_home, active_session).await?;
         fs::write(&active_snapshot, "active").await?;
-        fs::write(&active_snapshot_nonce, "active").await?;
 
         set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
         cleanup_stale_snapshots(codex_home, active_session).await?;
 
         assert_eq!(active_snapshot.exists(), true);
-        assert_eq!(active_snapshot_nonce.exists(), true);
         Ok(())
     }
 
