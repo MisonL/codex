@@ -757,7 +757,6 @@ mod tests {
             dependencies: None,
             policy: None,
             permission_profile: None,
-            permissions: None,
             path_to_skills_md: PathBuf::from("/tmp/a/SKILL.md"),
             scope: SkillScope::User,
         };
@@ -769,7 +768,6 @@ mod tests {
             dependencies: None,
             policy: None,
             permission_profile: None,
-            permissions: None,
             path_to_skills_md: PathBuf::from("/tmp/b/SKILL.md"),
             scope: SkillScope::User,
         };
@@ -1940,6 +1938,7 @@ async fn handle_post_message(
             model: guard.model.clone(),
             effort: guard.reasoning_effort,
             summary: Some(ReasoningSummaryConfig::Auto),
+            service_tier: None,
             final_output_json_schema: None,
             collaboration_mode,
             personality: None,
