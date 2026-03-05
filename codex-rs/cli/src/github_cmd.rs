@@ -507,13 +507,16 @@ async fn sender_allowed(state: &AppState, item: &WorkItem) -> Result<bool> {
     let owner = item.work.owner.as_str();
     let repo = item.work.repo.as_str();
     let sender = item.sender_login.as_str();
+    if sender.eq_ignore_ascii_case(owner) {
+        return Ok(true);
+    }
     let permission = state
         .github
         .repo_permission(owner, repo, sender)
         .await
         .with_context(|| format!("permission API failed for {owner}/{repo} {sender}"))?;
     let Some(permission) = permission else {
-        eprintln!("sender {sender} is not a collaborator on {owner}/{repo}");
+        eprintln!("sender {sender} not allowed on {owner}/{repo} (permission API returned 404)");
         return Ok(false);
     };
     if state.min_permission.allows(&permission) {
@@ -1529,6 +1532,68 @@ mod tests {
             .await
             .into_response();
         assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn sender_allowed_allows_repo_owner_without_permission_api() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = {
+            let calls = Arc::clone(&calls);
+            Router::new().route(
+                "/repos/o/r/collaborators/o/permission",
+                get(move || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            )
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        let github =
+            GithubApi::new_with_base_url("t".to_string(), format!("http://{addr}")).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState {
+            secret: Arc::new(b"sekrit".to_vec()),
+            github: Arc::new(github),
+            github_token: Arc::new("t".to_string()),
+            allow_repos: Arc::new(HashSet::new()),
+            min_permission: MinPermission::Triage,
+            command_prefix: Arc::new("/codex".to_string()),
+            repo_root: Arc::new(temp.path().join("repos")),
+            codex_bin: Arc::new(PathBuf::from("codex")),
+            codex_config_overrides: Arc::new(Vec::new()),
+            delivery_markers_dir: Arc::new(temp.path().join("deliveries")),
+            thread_state_dir: Arc::new(temp.path().join("threads")),
+            concurrency_limit: Arc::new(Semaphore::new(1)),
+            work_locks: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        let item = WorkItem {
+            repo_full_name: "o/r".to_string(),
+            sender_login: "o".to_string(),
+            work: WorkKey {
+                owner: "o".to_string(),
+                repo: "r".to_string(),
+                kind: WorkKind::Issue,
+                number: 1,
+            },
+            prompt: "hi".to_string(),
+            response_target: ResponseTarget::IssueComment { issue_number: 1 },
+        };
+
+        assert_eq!(sender_allowed(&state, &item).await.unwrap(), true);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         server.abort();
     }
