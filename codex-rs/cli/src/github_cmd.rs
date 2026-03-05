@@ -118,6 +118,7 @@ pub struct GithubCommand {
 struct AppState {
     secret: Arc<Vec<u8>>,
     github: Arc<GithubApi>,
+    github_token: Arc<String>,
     allow_repos: Arc<HashSet<String>>,
     min_permission: MinPermission,
     command_prefix: Arc<String>,
@@ -344,7 +345,7 @@ pub async fn run_main(cmd: GithubCommand, root_config_overrides: CliConfigOverri
     let delivery_markers_dir = codex_home.join("github").join("deliveries");
     let thread_state_dir = codex_home.join("github").join("threads");
 
-    let github = GithubApi::new(token)?;
+    let github = GithubApi::new(token.clone())?;
     let allow_repos = normalize_allowlist(&cmd.allow_repo);
     let codex_bin = std::env::current_exe().context("failed to resolve current executable")?;
 
@@ -355,6 +356,7 @@ pub async fn run_main(cmd: GithubCommand, root_config_overrides: CliConfigOverri
     let state = AppState {
         secret: Arc::new(secret.into_bytes()),
         github: Arc::new(github),
+        github_token: Arc::new(token),
         allow_repos: Arc::new(allow_repos),
         min_permission: cmd.min_permission,
         command_prefix: Arc::new(cmd.command_prefix),
@@ -912,7 +914,7 @@ async fn ensure_repo_and_worktree(state: &AppState, key: &WorkKey, work_dir: &Pa
     Ok(())
 }
 
-async fn ensure_clone(_state: &AppState, key: &WorkKey, repo_dir: &Path) -> Result<()> {
+async fn ensure_clone(state: &AppState, key: &WorkKey, repo_dir: &Path) -> Result<()> {
     if repo_dir.join(".git").exists() {
         run_git(repo_dir, git_args(&["fetch", "--prune", "origin"])).await?;
         return Ok(());
@@ -923,13 +925,44 @@ async fn ensure_clone(_state: &AppState, key: &WorkKey, repo_dir: &Path) -> Resu
         .await
         .with_context(|| format!("failed to create {}", parent.display()))?;
 
-    let url = format!("https://github.com/{}/{}.git", key.owner, key.repo);
+    let owner = &key.owner;
+    let repo = &key.repo;
+    let repo_spec = format!("{owner}/{repo}");
+    let mut cmd = tokio::process::Command::new("gh");
+    cmd.kill_on_drop(true);
+    cmd.current_dir(parent)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_TOKEN", state.github_token.as_str())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .args(["repo", "clone"])
+        .arg(repo_spec)
+        .arg(repo_dir)
+        .arg("--")
+        .arg("--filter=blob:none");
+    let gh_result = tokio::time::timeout(GIT_COMMAND_TIMEOUT, cmd.output()).await;
+
+    match gh_result {
+        Ok(Ok(output)) if output.status.success() => return Ok(()),
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("gh repo clone failed for {owner}/{repo}: {stderr}");
+        }
+        Ok(Err(err)) => eprintln!("gh repo clone failed for {owner}/{repo}: {err:#}"),
+        Err(_) => eprintln!("gh repo clone timed out in {}", parent.display()),
+    }
+
+    let url = github_clone_url(owner, repo);
     let mut args = git_args(&["clone", "--filter=blob:none"]);
     args.push(url);
     args.push(repo_dir.display().to_string());
     run_git(parent, args).await.context("git clone failed")?;
 
     Ok(())
+}
+
+fn github_clone_url(owner: &str, repo: &str) -> String {
+    format!("https://github.com:443/{owner}/{repo}.git")
 }
 
 async fn ensure_worktree(
@@ -1251,6 +1284,11 @@ mod tests {
     }
 
     #[test]
+    fn github_clone_url_uses_port_443() {
+        assert_eq!(github_clone_url("o", "r"), "https://github.com:443/o/r.git");
+    }
+
+    #[test]
     fn parse_issue_comment_requires_prefix() {
         let payload = serde_json::json!({
             "action": "created",
@@ -1402,6 +1440,7 @@ mod tests {
         let state = AppState {
             secret: Arc::new(b"sekrit".to_vec()),
             github: Arc::new(github),
+            github_token: Arc::new("t".to_string()),
             allow_repos: Arc::new(HashSet::new()),
             min_permission: MinPermission::Triage,
             command_prefix: Arc::new("/codex".to_string()),
@@ -1458,6 +1497,7 @@ mod tests {
         let state = AppState {
             secret: Arc::new(b"sekrit".to_vec()),
             github: Arc::new(github),
+            github_token: Arc::new("t".to_string()),
             allow_repos: Arc::new(HashSet::new()),
             min_permission: MinPermission::Triage,
             command_prefix: Arc::new("/codex".to_string()),
