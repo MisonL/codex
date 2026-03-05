@@ -33,8 +33,8 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 
 const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:8787";
-const DEFAULT_WEBHOOK_SECRET_ENV: &str = "CODEX_GITHUB_WEBHOOK_SECRET";
-const DEFAULT_GITHUB_TOKEN_ENV: &str = "CODEX_GITHUB_TOKEN";
+const DEFAULT_WEBHOOK_SECRET_ENV: &str = "GITHUB_WEBHOOK_SECRET";
+const DEFAULT_GITHUB_TOKEN_ENV: &str = "GITHUB_TOKEN";
 const DEFAULT_COMMAND_PREFIX: &str = "/codex";
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
@@ -1240,6 +1240,14 @@ mod tests {
         let body = b"hello world";
         let header = HeaderValue::from_static("sha1=deadbeef");
         assert!(!verify_github_signature(secret, body, Some(&header)));
+    }
+
+    #[test]
+    fn github_command_defaults_to_github_env_vars() {
+        let cmd = <GithubCommand as clap::Parser>::try_parse_from(["github"].as_ref())
+            .expect("parse should succeed");
+        assert_eq!(cmd.webhook_secret_env, DEFAULT_WEBHOOK_SECRET_ENV);
+        assert_eq!(cmd.github_token_env, DEFAULT_GITHUB_TOKEN_ENV);
     }
 
     #[test]
