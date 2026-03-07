@@ -435,7 +435,7 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
     )
     .await?;
 
-    let (script_path_str, command) = skill_script_command(&test, "sandboxed.sh")?;
+    let (_script_path_str, command) = skill_script_command(&test, "sandboxed.sh")?;
 
     let first_call_id = "zsh-fork-skill-empty-permissions-1";
     let first_arguments = shell_command_arguments(&command)?;
@@ -455,20 +455,11 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
     )
     .await?;
 
-    let approval = wait_for_exec_approval_request(&test)
-        .await
-        .expect("expected exec approval request before completion");
-    assert_eq!(approval.call_id, first_call_id);
-    assert_eq!(approval.command, vec![script_path_str.clone()]);
-    assert_eq!(approval.additional_permissions, None);
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::ApprovedForSession,
-        })
-        .await?;
+    let approval = wait_for_exec_approval_request(&test).await;
+    assert!(
+        approval.is_none(),
+        "expected empty-permissions skill to inherit the full-access turn sandbox without prompting"
+    );
 
     wait_for_turn_complete(&test).await;
 

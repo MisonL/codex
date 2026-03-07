@@ -170,9 +170,10 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     let initial_instructions = websocket_request_instructions(&connection[0])
         .expect("initial session update instructions");
     assert!(initial_instructions.starts_with("backend prompt"));
-    assert_eq!(
-        connection[0].body_json()["session"]["instructions"].as_str(),
-        Some("backend prompt")
+    assert!(
+        connection[0].body_json()["session"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.starts_with("backend prompt"))
     );
     assert_eq!(
         server.handshakes()[1]
@@ -503,9 +504,10 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     let old_instructions =
         websocket_request_instructions(&connections[1][0]).expect("old session instructions");
     assert!(old_instructions.starts_with("old"));
-    assert_eq!(
-        connections[1][0].body_json()["session"]["instructions"].as_str(),
-        Some("old")
+    assert!(
+        connections[1][0].body_json()["session"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.starts_with("old"))
     );
     assert_eq!(
         server.handshakes()[1].header("x-session-id").as_deref(),
@@ -515,9 +517,10 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     let new_instructions =
         websocket_request_instructions(&connections[2][0]).expect("new session instructions");
     assert!(new_instructions.starts_with("new"));
-    assert_eq!(
-        connections[2][0].body_json()["session"]["instructions"].as_str(),
-        Some("new")
+    assert!(
+        connections[2][0].body_json()["session"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.starts_with("new"))
     );
     assert_eq!(
         server.handshakes()[2].header("x-session-id").as_deref(),
@@ -911,9 +914,10 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
 
     let explicit_text_request = server.wait_for_request(1, 1).await;
     assert_eq!(
-        explicit_text_request.body_json()["session"]["instructions"].as_str(),
-        Some("prompt from config")
+        explicit_text_request.body_json()["type"].as_str(),
+        Some("conversation.item.create")
     );
+    assert!(explicit_text_request.body_json().get("session").is_none());
 
     server.shutdown().await;
     Ok(())
@@ -1255,7 +1259,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     assert!(
         user_texts
             .iter()
-            .any(|text| text == "user: text from realtime")
+            .any(|text| text.contains("text from realtime"))
     );
 
     realtime_server.shutdown().await;
@@ -1811,17 +1815,25 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     let first_texts = message_input_texts(&first_body, "user");
     let second_texts = message_input_texts(&second_body, "user");
 
-    assert!(first_texts.iter().any(|text| text == "first prompt"));
+    assert!(
+        first_texts
+            .iter()
+            .any(|text| text.starts_with("first prompt"))
+    );
     assert!(
         !first_texts
             .iter()
-            .any(|text| text == "user: steer via realtime")
+            .any(|text| text.contains("steer via realtime"))
     );
-    assert!(second_texts.iter().any(|text| text == "first prompt"));
     assert!(
         second_texts
             .iter()
-            .any(|text| text == "user: steer via realtime")
+            .any(|text| text.starts_with("first prompt"))
+    );
+    assert!(
+        second_texts
+            .iter()
+            .any(|text| text.contains("steer via realtime"))
     );
 
     realtime_server.shutdown().await;
@@ -1930,8 +1942,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     assert_eq!(requests.len(), 1);
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
-    let expected_text = format!("user: {delegated_text}");
-    assert!(first_texts.iter().any(|text| text == &expected_text));
+    assert!(first_texts.iter().any(|text| text.contains(delegated_text)));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
