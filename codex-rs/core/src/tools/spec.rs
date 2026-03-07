@@ -7,6 +7,9 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::tools::handlers::CRON_CREATE_TOOL_NAME;
+use crate::tools::handlers::CRON_DELETE_TOOL_NAME;
+use crate::tools::handlers::CRON_LIST_TOOL_NAME;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -65,6 +68,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
+    pub scheduled_tasks_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
@@ -81,6 +85,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
     pub(crate) session_source: SessionSource,
+    pub(crate) scheduled_tasks_enabled: bool,
 }
 
 impl ToolsConfig {
@@ -90,6 +95,7 @@ impl ToolsConfig {
             features,
             web_search_mode,
             session_source,
+            scheduled_tasks_enabled,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_js_repl = features.enabled(Feature::JsRepl);
@@ -168,6 +174,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
+            scheduled_tasks_enabled: *scheduled_tasks_enabled,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
@@ -1808,6 +1815,79 @@ fn create_grep_files_tool() -> ToolSpec {
     })
 }
 
+fn create_cron_create_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "schedule".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional recurring schedule as a 5-field numeric cron expression in the local timezone: minute hour day-of-month month day-of-week. Example: `0 17 * * 1-5`. Provide either `schedule` or `run_at`.".to_string(),
+                ),
+            },
+        ),
+        (
+            "run_at".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional one-shot run time as an RFC3339 timestamp. Provide either `schedule` or `run_at`.".to_string(),
+                ),
+            },
+        ),
+        (
+            "prompt".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "The prompt text to enqueue when the scheduled task fires. Scheduled tasks are session-scoped and do not survive process exit.".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: CRON_CREATE_TOOL_NAME.to_string(),
+        description: "Create a session-scoped scheduled task. The scheduler checks roughly once per second, only fires between turns, skips missed backlogs instead of replaying every missed run, and drops runs that are more than three days overdue.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["prompt".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_cron_list_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: CRON_LIST_TOOL_NAME.to_string(),
+        description: "List session-scoped scheduled tasks that are still active.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: Some(Vec::new()),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_cron_delete_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier returned by CronCreate or CronList.".to_string()),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: CRON_DELETE_TOOL_NAME.to_string(),
+        description: "Delete a session-scoped scheduled task by id.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2349,6 +2429,9 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::CronCreateHandler;
+    use crate::tools::handlers::CronDeleteHandler;
+    use crate::tools::handlers::CronListHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -2376,6 +2459,9 @@ pub(crate) fn build_specs(
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
+    let cron_create_handler = Arc::new(CronCreateHandler);
+    let cron_list_handler = Arc::new(CronListHandler);
+    let cron_delete_handler = Arc::new(CronDeleteHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
@@ -2453,6 +2539,18 @@ pub(crate) fn build_specs(
             default_mode_request_user_input: config.default_mode_request_user_input,
         }));
         builder.register_handler("request_user_input", request_user_input_handler);
+    }
+
+    if config.scheduled_tasks_enabled {
+        builder.push_spec(create_cron_create_tool());
+        builder.push_spec(create_cron_list_tool());
+        builder.push_spec(create_cron_delete_tool());
+        builder.register_handler(CRON_CREATE_TOOL_NAME, cron_create_handler.clone());
+        builder.register_handler("cron_create", cron_create_handler);
+        builder.register_handler(CRON_LIST_TOOL_NAME, cron_list_handler.clone());
+        builder.register_handler("cron_list", cron_list_handler);
+        builder.register_handler(CRON_DELETE_TOOL_NAME, cron_delete_handler.clone());
+        builder.register_handler("cron_delete", cron_delete_handler);
     }
 
     if config.search_tool
@@ -2830,6 +2928,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&config, None, None, &[]).build();
 
@@ -2856,6 +2955,9 @@ mod tests {
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(CollaborationModesConfig::default()),
+            create_cron_create_tool(),
+            create_cron_list_tool(),
+            create_cron_delete_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -2896,6 +2998,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(
@@ -2922,6 +3025,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["presentation_artifact", "spreadsheet_artifact"]);
@@ -2942,6 +3046,8 @@ mod tests {
             session_source: SessionSource::SubAgent(SubAgentSource::Other(
                 "agent_job:test".to_string(),
             )),
+
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["report_agent_job_result"]);
@@ -2968,6 +3074,8 @@ mod tests {
             session_source: SessionSource::SubAgent(SubAgentSource::Other(
                 "agent_job:test".to_string(),
             )),
+
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["report_agent_job_result"]);
@@ -2984,6 +3092,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         let request_user_input_tool = find_tool(&tools, "request_user_input");
@@ -2998,6 +3107,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         let request_user_input_tool = find_tool(&tools, "request_user_input");
@@ -3021,6 +3131,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert!(
@@ -3041,6 +3152,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -3067,6 +3179,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
@@ -3158,6 +3271,7 @@ mod tests {
             features,
             web_search_mode,
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -3192,6 +3306,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -3220,6 +3335,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -3323,6 +3439,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -3346,6 +3463,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
 
@@ -3370,6 +3488,9 @@ mod tests {
             &[
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3388,6 +3509,9 @@ mod tests {
             &[
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3408,6 +3532,9 @@ mod tests {
                 "write_stdin",
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3428,6 +3555,9 @@ mod tests {
                 "write_stdin",
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3446,6 +3576,9 @@ mod tests {
             &[
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3464,6 +3597,9 @@ mod tests {
             &[
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3482,6 +3618,9 @@ mod tests {
             &[
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "web_search",
                 "view_image",
             ],
@@ -3499,6 +3638,9 @@ mod tests {
             &[
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3519,6 +3661,9 @@ mod tests {
                 "write_stdin",
                 "update_plan",
                 "request_user_input",
+                "CronCreate",
+                "CronList",
+                "CronDelete",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -3537,6 +3682,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
 
@@ -3561,6 +3707,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
@@ -3587,6 +3734,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -3613,6 +3761,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -3645,6 +3794,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -3732,6 +3882,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -3778,6 +3929,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         let (tools, _) = build_specs(
@@ -3848,6 +4000,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         let (tools, _) = build_specs(
@@ -3903,6 +4056,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         let (tools, _) = build_specs(
@@ -3955,6 +4109,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         let (tools, _) = build_specs(
@@ -4009,6 +4164,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
 
         let (tools, _) = build_specs(
@@ -4154,6 +4310,7 @@ Examples of valid command strings:
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
+            scheduled_tasks_enabled: true,
         });
         let (tools, _) = build_specs(
             &tools_config,

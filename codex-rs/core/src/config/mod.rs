@@ -522,6 +522,9 @@ pub struct Config {
     /// Defaults to `true`.
     pub check_for_update_on_startup: bool,
 
+    /// When `true`, disables scheduled-task tools and the `/loop` command.
+    pub disable_cron: bool,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -1285,6 +1288,9 @@ pub struct ConfigToml {
     /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: Option<bool>,
+
+    /// When `true`, disables scheduled-task tools and the `/loop` command.
+    pub disable_cron: Option<bool>,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -2255,6 +2261,10 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
+        let disable_cron = config_profile
+            .disable_cron
+            .or(cfg.disable_cron)
+            .unwrap_or(false);
         let model_catalog = load_model_catalog(
             config_profile
                 .model_catalog_json
@@ -2460,6 +2470,7 @@ impl Config {
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
+            disable_cron,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             analytics_enabled: config_profile
                 .analytics
@@ -5311,6 +5322,7 @@ model_verbosity = "high"
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
+                disable_cron: false,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 tui_notification_method: Default::default(),
@@ -5448,6 +5460,7 @@ model_verbosity = "high"
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
+            disable_cron: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             tui_notification_method: Default::default(),
@@ -5583,6 +5596,7 @@ model_verbosity = "high"
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
+            disable_cron: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             tui_notification_method: Default::default(),
@@ -5704,6 +5718,7 @@ model_verbosity = "high"
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
+            disable_cron: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             tui_notification_method: Default::default(),
@@ -6374,6 +6389,33 @@ mcp_oauth_callback_url = "https://example.com/callback"
             *config.permissions.sandbox_policy.get(),
             SandboxPolicy::new_read_only_policy()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn disable_cron_prefers_profile_over_root() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                disable_cron: Some(true),
+                profile: Some("scheduled".to_string()),
+                profiles: HashMap::from([(
+                    "scheduled".to_string(),
+                    ConfigProfile {
+                        disable_cron: Some(false),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                cwd: Some(temp.path().to_path_buf()),
+                ..Default::default()
+            },
+            temp.path().to_path_buf(),
+        )?;
+
+        assert!(!config.disable_cron);
         Ok(())
     }
 
