@@ -535,7 +535,7 @@ function Invoke-DownloadWithProgress {
             }
 
             $response = $client.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-            $response.EnsureSuccessStatusCode()
+            [void]$response.EnsureSuccessStatusCode()
 
             $totalBytes = $response.Content.Headers.ContentLength
             $contentStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
