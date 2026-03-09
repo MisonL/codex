@@ -10,6 +10,36 @@
 
 > **Note:** The shell installer prefers `legacy-musl`, then `musl`, then `gnu` Linux assets when available. `gnu` assets require glibc 2.35 or newer.
 
+### Hodexctl
+
+如果你需要直接使用本项目的 release 二进制，并把 `hodex` 与现有 npm / nvm / 全局 `codex` 隔离开，可以使用仓库内提供的 `hodexctl` 管理脚本：
+
+- macOS / Linux / WSL: `scripts/hodexctl/hodexctl.sh`
+- Windows PowerShell: `scripts/hodexctl/hodexctl.ps1`
+
+常见用法：
+
+```bash
+./scripts/hodexctl/hodexctl.sh install
+hodexctl list
+hodexctl upgrade
+hodexctl status
+```
+
+```powershell
+.\scripts\hodexctl\hodexctl.ps1 install
+hodexctl list
+hodexctl upgrade
+hodexctl status
+```
+
+补充说明：
+
+- `hodex` 固定用于 release 版本管理。
+- `hodexctl source ...` 只负责源码下载、同步和开发工具链准备，不会编译源码，也不会接管 `hodex`。
+- `hodexctl list` 的版本详情页支持 `AI总结`，会优先调用本机 `hodex`，不可用时自动回退 `codex`。
+- 更完整的交互说明、参数、环境变量覆盖和排障说明见 [../scripts/hodexctl/README.md](../scripts/hodexctl/README.md)。
+
 ### DotSlash
 
 The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.

@@ -36,6 +36,28 @@ irm https://raw.githubusercontent.com/stellarlinkco/codex/main/scripts/install.p
 
 Copy/paste the command for your platform above to download the latest Release binary for your OS/arch. The shell command installs `codex` to `~/.local/bin` and prints a PATH reminder.
 
+### Optional: Hodexctl
+
+如果你希望独立管理 `hodex`，且不影响现有 `codex`，可以使用 `hodexctl`。
+
+**macOS, Linux, WSL:**
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/stellarlinkco/codex/main/scripts/hodexctl/hodexctl.sh -o ./hodexctl.sh
+chmod +x ./hodexctl.sh
+./hodexctl.sh
+```
+
+**Windows PowerShell:**
+
+```powershell
+$script = Join-Path $env:TEMP "hodexctl.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/stellarlinkco/codex/main/scripts/hodexctl/hodexctl.ps1 -OutFile $script
+& $script
+```
+
+详细说明见 [Hodexctl 使用说明](./scripts/hodexctl/README.md)。
+
 ### Run
 
 ```shell
@@ -47,6 +69,7 @@ codex serve
 
 - [**Contributing**](./docs/contributing.md)
 - [**Installing & building**](./docs/install.md)
+- [**Hodexctl 使用说明**](./scripts/hodexctl/README.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
 ## Acknowledgements
