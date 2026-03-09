@@ -4270,80 +4270,80 @@ function Invoke-Uninstall {
 }
 
 function Invoke-Status {
-    Write-Host "平台: $script:PlatformLabel"
-    Write-Host "状态目录: $script:StateRoot"
+    Write-Output "平台: $script:PlatformLabel"
+    Write-Output "状态目录: $script:StateRoot"
 
     if ($script:State) {
         if (-not [string]::IsNullOrWhiteSpace([string]$script:State.binary_path)) {
-            Write-Host "正式版安装状态: 已安装"
-            Write-Host "版本: $([string]$script:State.installed_version)"
-            Write-Host "Release: $([string]$script:State.release_name) ($([string]$script:State.release_tag))"
-            Write-Host "资产: $([string]$script:State.asset_name)"
-            Write-Host "二进制: $([string]$script:State.binary_path)"
+            Write-Output "正式版安装状态: 已安装"
+            Write-Output "版本: $([string]$script:State.installed_version)"
+            Write-Output "Release: $([string]$script:State.release_name) ($([string]$script:State.release_tag))"
+            Write-Output "资产: $([string]$script:State.asset_name)"
+            Write-Output "二进制: $([string]$script:State.binary_path)"
             if ($env:OS -eq "Windows_NT") {
                 $helpersComplete = Test-ReleaseHelpersComplete -BinaryPath ([string]$script:State.binary_path)
-                Write-Host ("Windows 运行组件: " + $(if ($helpersComplete) { "完整" } else { "缺失" }))
+                Write-Output ("Windows 运行组件: " + $(if ($helpersComplete) { "完整" } else { "缺失" }))
                 foreach ($helperPath in @(Get-ReleaseHelperPaths -BinaryPath ([string]$script:State.binary_path))) {
                     $helperName = Split-Path -Leaf $helperPath
-                    Write-Host ("  - {0}: {1}" -f $helperName, $(if (Test-Path -LiteralPath $helperPath) { "已安装" } else { "缺失" }))
+                    Write-Output ("  - {0}: {1}" -f $helperName, $(if (Test-Path -LiteralPath $helperPath) { "已安装" } else { "缺失" }))
                 }
                 if (-not $helpersComplete) {
                     Write-WarnLine "当前 Windows 安装不完整，请重新执行 hodexctl install 或 hodexctl upgrade。"
                 }
             }
         } else {
-            Write-Host "正式版安装状态: 未安装"
+            Write-Output "正式版安装状态: 未安装"
             if (-not [string]::IsNullOrWhiteSpace([string]$script:State.controller_path) -and (Test-Path -LiteralPath ([string]$script:State.controller_path))) {
-                Write-Host "管理器状态: 已安装"
-                Write-Host "提示: 运行 hodexctl install 开始安装正式版"
+                Write-Output "管理器状态: 已安装"
+                Write-Output "提示: 运行 hodexctl install 开始安装正式版"
             }
         }
-        Write-Host "命令目录: $([string]$script:State.command_dir)"
-        Write-Host "管理脚本副本: $([string]$script:State.controller_path)"
-        Write-Host "PATH 处理: $([string]$script:State.path_update_mode)"
+        Write-Output "命令目录: $([string]$script:State.command_dir)"
+        Write-Output "管理脚本副本: $([string]$script:State.controller_path)"
+        Write-Output "PATH 处理: $([string]$script:State.path_update_mode)"
         if (-not [string]::IsNullOrWhiteSpace([string]$script:State.path_profile)) {
-            Write-Host "PATH 作用域: $([string]$script:State.path_profile)"
+            Write-Output "PATH 作用域: $([string]$script:State.path_profile)"
         }
-        Write-Host "Node 处理选择: $([string]$script:State.node_setup_choice)"
-        Write-Host "安装时间: $([string]$script:State.installed_at)"
+        Write-Output "Node 处理选择: $([string]$script:State.node_setup_choice)"
+        Write-Output "安装时间: $([string]$script:State.installed_at)"
         $hodexWrapper = Join-Path ([string]$script:State.command_dir) 'hodex.cmd'
         $hodexctlWrapper = Join-Path ([string]$script:State.command_dir) 'hodexctl.cmd'
         if (Test-Path -LiteralPath $hodexWrapper) {
-            Write-Host "hodex 包装器: $hodexWrapper"
+            Write-Output "hodex 包装器: $hodexWrapper"
         }
         if (Test-Path -LiteralPath $hodexctlWrapper) {
-            Write-Host "hodexctl 包装器: $hodexctlWrapper"
+            Write-Output "hodexctl 包装器: $hodexctlWrapper"
         }
-        Write-Host "受管 hodex 指向: $(Get-ActiveHodexAlias)"
-        Write-Host "源码条目数量: $(@((Get-SourceProfiles).Keys).Count)"
+        Write-Output "受管 hodex 指向: $(Get-ActiveHodexAlias)"
+        Write-Output "源码条目数量: $(@((Get-SourceProfiles).Keys).Count)"
         foreach ($profileName in ((Get-SourceProfiles).Keys)) {
             $profile = Get-SourceProfile -ProfileName $profileName
-            Write-Host ("源码条目: {0} | {1} | {2} | 仅源码管理" -f $profileName, [string]$profile.repo_input, [string]$profile.current_ref)
+            Write-Output ("源码条目: {0} | {1} | {2} | 仅源码管理" -f $profileName, [string]$profile.repo_input, [string]$profile.current_ref)
         }
     } else {
-        Write-Host "正式版安装状态: 未安装"
-        Write-Host "源码条目数量: 0"
+        Write-Output "正式版安装状态: 未安装"
+        Write-Output "源码条目数量: 0"
     }
 
     $hodexCmd = Get-Command hodex -ErrorAction SilentlyContinue
     if ($hodexCmd) {
-        Write-Host "PATH 中的 hodex: $($hodexCmd.Source)"
+        Write-Output "PATH 中的 hodex: $($hodexCmd.Source)"
     } else {
-        Write-Host "PATH 中的 hodex: 未找到"
+        Write-Output "PATH 中的 hodex: 未找到"
     }
 
     $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
     if ($codexCmd) {
-        Write-Host "PATH 中的 codex: $($codexCmd.Source)"
+        Write-Output "PATH 中的 codex: $($codexCmd.Source)"
     } else {
-        Write-Host "PATH 中的 codex: 未找到"
+        Write-Output "PATH 中的 codex: 未找到"
     }
 
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     if ($nodeCmd) {
-        Write-Host "Node.js: $(& $nodeCmd.Source -v)"
+        Write-Output "Node.js: $(& $nodeCmd.Source -v)"
     } else {
-        Write-Host "Node.js: 未安装"
+        Write-Output "Node.js: 未安装"
     }
 }
 
