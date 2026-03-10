@@ -399,7 +399,8 @@ try {
 Write-Output `$hodexSource
 & hodex --version
 "@ 2>&1 | Out-String)
-                Assert-Contains -Text $repairShellOutput -Expected "codex-cli 9.9.9"
+                if ($LASTEXITCODE -ne 0) { throw "repair shell 校验失败: $repairShellOutput" }
+                Assert-Contains -Text $repairShellOutput -Expected $repairCommandDir
             } finally {
                 [Environment]::SetEnvironmentVariable("Path", $originalUserPath, "User")
             }
