@@ -699,7 +699,7 @@ assert_contains "$path_fix_state_dir/state.json" "\"path_detected_source\": \"ma
 assert_contains "$path_fix_home_dir/.zshrc" "# >>> hodexctl >>>"
 assert_contains "$path_fix_home_dir/.zprofile" "# >>> hodexctl >>>"
 env -i HOME="$path_fix_home_dir" USER="$USER" SHELL=/bin/zsh TERM=xterm-256color PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  zsh -lc 'source ~/.zshrc >/dev/null 2>&1; command -v hodex; hodex --version' >"$tmp_dir/path-fix-shell.txt"
+  bash -lc 'source ~/.zprofile >/dev/null 2>&1 || true; source ~/.zshrc >/dev/null 2>&1 || true; command -v hodex; hodex --version' >"$tmp_dir/path-fix-shell.txt"
 assert_contains "$tmp_dir/path-fix-shell.txt" "$path_fix_command_dir/hodex"
 assert_contains "$tmp_dir/path-fix-shell.txt" "codex-cli 9.9.9"
 
@@ -719,7 +719,7 @@ HOME="$repair_home_dir" PATH="/usr/bin:/bin:/usr/sbin:/sbin" SHELL="/bin/zsh" \
 assert_contains "$repair_output" "repair 已完成。"
 assert_contains "$repair_home_dir/.zshrc" "# >>> hodexctl >>>"
 env -i HOME="$repair_home_dir" USER="$USER" SHELL=/bin/zsh TERM=xterm-256color PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  zsh -lc 'source ~/.zshrc >/dev/null 2>&1; command -v hodex; hodex --version' >"$tmp_dir/repair-shell.txt"
+  bash -lc 'source ~/.zprofile >/dev/null 2>&1 || true; source ~/.zshrc >/dev/null 2>&1 || true; command -v hodex; hodex --version' >"$tmp_dir/repair-shell.txt"
 assert_contains "$tmp_dir/repair-shell.txt" "$repair_command_dir/hodex"
 assert_contains "$tmp_dir/repair-shell.txt" "codex-cli 9.9.9"
 

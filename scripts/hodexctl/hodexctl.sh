@@ -2635,7 +2635,11 @@ update_path_if_needed() {
   if ((AUTO_YES)); then
     should_update=0
   else
-    printf '%s\n' "当前目录 $COMMAND_DIR 不在 PATH 中。"
+    if [[ "$PATH_DETECTED_SOURCE" == "current-process-only" ]]; then
+      printf '%s\n' "检测到命令目录 $COMMAND_DIR 仅在当前会话 PATH 中，未发现持久化配置。"
+    else
+      printf '%s\n' "当前目录 $COMMAND_DIR 不在 PATH 中。"
+    fi
     printf '是否自动写入 PATH？[Y/n]: '
     local answer
     read -r answer

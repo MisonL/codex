@@ -283,7 +283,7 @@ try {
 		                $env:HODEX_COMMAND_DIR = $installCommandDir
 		                Remove-Item Env:\HODEXCTL_NO_PATH_UPDATE -ErrorAction SilentlyContinue
 
-		                $installerOutput = (& $installScriptPath 2>&1 | Out-String)
+		                $installerOutput = (& $installScriptPath *>&1 | Out-String)
 		                Assert-Contains -Text $installerOutput -Expected "当前会话已"
 		                $hodexctlSource = (Get-Command hodexctl -ErrorAction Stop).Source
 		                Assert-Contains -Text $hodexctlSource -Expected $installCommandDir

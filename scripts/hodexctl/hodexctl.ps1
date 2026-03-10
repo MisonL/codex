@@ -1336,7 +1336,7 @@ function Update-PathIfNeeded {
     if (Test-PathContains -PathValue $userPath -Entry $script:CurrentCommandDir) {
         if (-not (Test-PathContains -PathValue $currentPath -Entry $script:CurrentCommandDir)) {
             $env:Path = Add-PathEntry -PathValue $currentPath -Entry $script:CurrentCommandDir
-            $script:PathUpdateMode = "already"
+            $script:PathUpdateMode = "configured"
         } else {
             $script:PathUpdateMode = "already"
         }
@@ -1352,7 +1352,11 @@ function Update-PathIfNeeded {
 
     $shouldUpdate = $true
     if (-not $Yes) {
-        $answer = Read-Host "当前目录 $script:CurrentCommandDir 不在 PATH 中，是否写入用户 PATH？[Y/n]"
+        if ($script:PathDetectedSource -eq "current-process-only") {
+            $answer = Read-Host "检测到命令目录 $script:CurrentCommandDir 仅在当前会话 PATH 中，是否写入用户 PATH？[Y/n]"
+        } else {
+            $answer = Read-Host "当前目录 $script:CurrentCommandDir 不在 PATH 中，是否写入用户 PATH？[Y/n]"
+        }
         if ($answer -match "^(n|N|no|NO)$") {
             $shouldUpdate = $false
         }
