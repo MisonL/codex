@@ -2,62 +2,43 @@
 
 ### System requirements
 
-| Requirement                 | Details                                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Requirement                 | Details                                                                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Operating systems           | macOS 12+, Linux (the shell installer prefers `gnu` assets and falls back to `musl`; `gnu` assets require glibc >= 2.35), or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                                                                                               |
-| RAM                         | 4-GB minimum (8-GB recommended)                                                                                                             |
+| Git (optional, recommended) | 2.23+ for built-in PR helpers                                                                                                                        |
+| RAM                         | 4-GB minimum (8-GB recommended)                                                                                                                      |
 
 > **Note:** The shell installer prefers `gnu` Linux assets and falls back to `musl` when older releases only provide `musl`. `gnu` assets require glibc 2.35 or newer.
 
 ### Hodexctl
 
-If you want to manage `hodex` releases without touching existing `codex`, use `hodexctl`.
+如果你需要直接使用本项目的 release 二进制，并把 `hodex` 与现有 npm / nvm / 全局 `codex` 隔离开，可以使用仓库内提供的 `hodexctl` 管理脚本：
 
-Recommended first install:
+- macOS / Linux / WSL: `scripts/hodexctl/hodexctl.sh`
+- Windows PowerShell: `scripts/hodexctl/hodexctl.ps1`
+
+常见用法：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stellarlinkco/codex/main/scripts/install-hodexctl.sh | bash
+./scripts/hodexctl/hodexctl.sh install
+hodexctl list
+hodexctl upgrade
+hodexctl status
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/stellarlinkco/codex/main/scripts/install-hodexctl.ps1 | iex
+.\scripts\hodexctl\hodexctl.ps1 install
+hodexctl list
+hodexctl upgrade
+hodexctl status
 ```
 
-After install, use:
+补充说明：
 
-- `hodexctl`
-- `hodexctl install`
-- `hodexctl list`
-
-Notes:
-
-- On macOS / Linux / WSL, `curl | bash` runs in a subshell. After install, open a new terminal or follow the installer output and run `source ~/.zshrc` / `source ~/.bashrc` to make `hodexctl` available in the current session.
-- On Windows PowerShell, `irm | iex` runs in the current session and tries to refresh `$env:Path`; if it still doesn’t work, reopen PowerShell.
-- If PATH / wrapper / state drift makes commands unavailable, run `hodexctl repair` to self-heal.
-
-Common usage:
-
-macOS / Linux / WSL：
-
-- `./scripts/hodexctl/hodexctl.sh install`
-- `hodexctl list`
-- `hodexctl upgrade`
-- `hodexctl status`
-
-Windows PowerShell：
-
-- `.\scripts\hodexctl\hodexctl.ps1 install`
-- `hodexctl list`
-- `hodexctl upgrade`
-- `hodexctl status`
-
-Notes:
-
-- `hodex` manages releases only.
-- `hodexctl source ...` only handles source download, sync, and toolchain prep.
-- `hodexctl uninstall` does not affect existing `codex`.
-- See [../scripts/hodexctl/README.md](../scripts/hodexctl/README.md) for detailed parameters and interactive guidance.
+- `hodex` 固定用于 release 版本管理。
+- `hodexctl source ...` 只负责源码下载、同步和开发工具链准备，不会编译源码，也不会接管 `hodex`。
+- `hodexctl list` 的版本详情页支持 `AI总结`，会优先调用本机 `hodex`，不可用时自动回退 `codex`。
+- 更完整的交互说明、参数、环境变量覆盖和排障说明见 [../scripts/hodexctl/README.md](../scripts/hodexctl/README.md)。
 
 ### DotSlash
 
@@ -67,7 +48,7 @@ The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file fo
 
 ```bash
 # Clone the repository and navigate to the root of the Cargo workspace.
-git clone https://github.com/stellarlinkco/codex.git
+git clone https://github.com/openai/codex.git
 cd codex/codex-rs
 
 # Install the Rust toolchain, if necessary.
