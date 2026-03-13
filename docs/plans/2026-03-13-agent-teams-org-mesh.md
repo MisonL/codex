@@ -315,7 +315,122 @@ These map directly to the `Artifact` object described in `2026-03-06-codex-swarm
 1. `org_leader_message` from `lead-a` to `lead-b`.
 1. `lead-b` forwards relevant details to Team B members via `team_broadcast` or `team_message`.
 
-## 11. Incremental Implementation Plan
+## 11. TUI UX (User Feedback + Control Surfaces)
+
+This section describes how the Codex TUI can make multi-team work feel visible and controllable without flooding the transcript.
+
+Design goals:
+
+1. **Layered information:** at-a-glance summaries first, drill-down when needed.
+1. **Low noise by default:** avoid streaming every internal message into the main transcript.
+1. **Fast navigation:** switching focus between President / leaders / members should be 1-2 actions.
+1. **Durable state as source of truth:** dashboards should read from persisted control-plane state (not from model output).
+
+### 11.1 Information Architecture
+
+The TUI should provide a clear hierarchy:
+
+- Org (President scope) -> Teams -> Agents -> Tasks -> Artifacts
+
+Where:
+
+- The main chat thread is the **President**.
+- Each team has one or more **leaders** (agent threads).
+- Members collaborate in-team via mesh messaging + shared tasks.
+
+### 11.2 Entry Points (Commands)
+
+The TUI already has slash commands and selection views. Add team/org entry points as slash commands:
+
+- `/org`: open Org dashboard (teams + leaders + rollups)
+- `/org inbox`: show President's org inbox (leader updates, cross-team coordination)
+- `/team`: open current team dashboard (for leader/member threads)
+- `/team tasks`: open task board (current team)
+- `/team inbox`: show current thread's team inbox
+- `/teams`: list teams and jump to a team leader thread ("watch leader")
+
+These commands should be available only when collaboration features are enabled (same gating model as `/collab` and `/agent`).
+
+### 11.3 Dashboards and Overlays
+
+Use the existing full-screen overlay/pager pattern (like the transcript overlay) to implement:
+
+1. **Org Dashboard (President)**
+- Table rows: `team name/id`, `leader`, `status`, `members`, `tasks (pending/claimed/completed)`, `unread (org inbox)`
+- Actions:
+  - Watch leader thread
+  - Message leader (org-scoped)
+  - Open team summary (read-only)
+
+1. **Team Dashboard (Leader/Member)**
+- Sections:
+  - Members list with status dots
+  - Task rollup
+  - Inbox rollup (unread)
+  - Recent artifacts (by task)
+- Actions:
+  - Watch a member thread
+  - Open task board
+  - Open inbox
+
+1. **Task Board**
+- Group tasks by state: `Pending`, `Claimed`, `Completed`
+- For multi-assignee tasks: show per-assignee sub-state (claimed/completed) and completion mode ("any/all/leader approves")
+- Actions:
+  - Claim (self)
+  - Complete (self)
+  - Open artifacts for task
+  - (Leader only) assign/unassign members
+
+1. **Inbox Viewer**
+- Backed by `team_inbox_pop/ack` and `org_inbox_pop/ack` (cursor-based).
+- Show messages with:
+  - `from` (name + role)
+  - `team/org` context
+  - `taskId` (if present)
+  - prompt preview
+- Provide paging, search, and an explicit "Ack all visible" action.
+
+### 11.4 Transcript: Summaries, Not Full Internal Chat
+
+The main transcript should contain:
+
+- High-level orchestration events (spawn/wait/close) (already present via `Collab*` events).
+- Task lifecycle summaries:
+  - Task created (team + assignees)
+  - Task completed (who completed, whether task is now fully completed)
+- Leader-to-President updates (org inbox), summarized as short "status cards".
+
+It should *not* automatically display every intra-team peer message by default. Those belong in inbox views.
+
+### 11.5 Status Line Enhancements (Optional)
+
+Add new optional status line items to support "at a glance" operation:
+
+- `org`: current org id (or "none")
+- `team`: current team id/name (or "none")
+- `agents`: running/total agents in org (or in team)
+- `unread`: unread inbox count (org/team depending on role)
+- `tasks`: pending/claimed rollup for current team
+
+These should be computed from persisted state and cached with lightweight refresh intervals.
+
+### 11.6 Data Sources (No Model Required)
+
+To avoid model/tool coupling, the TUI should query state via:
+
+1. Persisted control-plane files under `$CODEX_HOME` (teams, orgs, tasks, inbox cursors).
+1. Or (preferred long-term) app-server v2 endpoints for `swarm/read`, `swarm/list`, `swarm/task/list`, `swarm/inbox/pop`.
+
+This aligns with the `2026-03-06` plan: collab tools become stable protocol/control-plane resources, not "tool output parsing".
+
+### 11.7 UX Edge Cases
+
+1. If collaboration features are disabled, the dashboards should show a friendly prompt to enable them.
+1. If an agent thread is missing (shutdown/not found), keep it visible but marked closed (like the existing agent picker).
+1. If inbox JSONL grows large, rely on cursor-based pop and avoid full-file scans on every redraw.
+
+## 12. Incremental Implementation Plan
 
 1. Mesh messaging:
 - Add `team_info`.
@@ -334,7 +449,7 @@ These map directly to the `Artifact` object described in `2026-03-06-codex-swarm
 1. UX follow-ons:
 - TUI overlays for org/team inboxes and task state summaries.
 
-## 12. Compatibility and Migration
+## 13. Compatibility and Migration
 
 1. Keep v1 tool names where possible; change behavior in a backward-compatible way where feasible.
 1. Version persisted schemas:
