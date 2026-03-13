@@ -74,6 +74,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
+    pub agent_org_tools: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
@@ -104,6 +105,7 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_agent_org_tools = features.enabled(Feature::AgentOrg);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
@@ -182,6 +184,7 @@ impl ToolsConfig {
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
+            agent_org_tools: include_agent_org_tools,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
@@ -1511,6 +1514,39 @@ fn create_team_task_complete_tool() -> ToolSpec {
     })
 }
 
+fn create_team_current_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "team_current".to_string(),
+        description: "Return the caller's current team context (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: Some(Vec::new()),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_team_info_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "team_id".to_string(),
+        JsonSchema::String {
+            description: Some("Team id returned by spawn_team.".to_string()),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "team_info".to_string(),
+        description: "Return persisted team metadata (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["team_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_team_message_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2725,6 +2761,14 @@ pub(crate) fn build_specs(
         builder.register_handler("team_inbox_pop", multi_agent_handler.clone());
         builder.register_handler("team_inbox_ack", multi_agent_handler.clone());
         builder.register_handler("team_cleanup", multi_agent_handler);
+    }
+
+    if config.agent_org_tools {
+        let multi_agent_handler = Arc::new(MultiAgentHandler);
+        builder.push_spec_with_parallel_support(create_team_current_tool(), true);
+        builder.push_spec_with_parallel_support(create_team_info_tool(), true);
+        builder.register_handler("team_current", multi_agent_handler.clone());
+        builder.register_handler("team_info", multi_agent_handler);
     }
 
     if config.agent_jobs_tools || config.agent_jobs_worker_tools {

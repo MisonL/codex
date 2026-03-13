@@ -200,6 +200,107 @@ async fn read_persisted_team_config(
         .map_err(|err| team_persistence_error("parse team config", team_id, err))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallerTeamRole {
+    Lead,
+    Member,
+}
+
+impl CallerTeamRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            CallerTeamRole::Lead => "lead",
+            CallerTeamRole::Member => "member",
+        }
+    }
+}
+
+async fn try_read_persisted_team_config(
+    codex_home: &Path,
+    team_id: &str,
+) -> Result<Option<PersistedTeamConfig>, FunctionCallError> {
+    let config_path = team_config_path(codex_home, team_id);
+    let raw = match tokio::fs::read_to_string(&config_path).await {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(team_persistence_error("read team config", team_id, err)),
+    };
+
+    serde_json::from_str::<PersistedTeamConfig>(&raw)
+        .map(Some)
+        .map_err(|err| team_persistence_error("parse team config", team_id, err))
+}
+
+async fn list_persisted_team_ids(codex_home: &Path) -> Result<Vec<String>, FunctionCallError> {
+    let teams_root = codex_home.join(TEAM_CONFIG_DIR);
+    let mut dir = match tokio::fs::read_dir(&teams_root).await {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "failed to read teams directory: {err}"
+            )));
+        }
+    };
+
+    let mut team_ids = Vec::new();
+    while let Some(entry) = dir
+        .next_entry()
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format!("failed to list teams: {err}")))?
+    {
+        let file_type = entry.file_type().await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to inspect teams directory: {err}"))
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        if let Some(team_id) = entry.file_name().to_str() {
+            team_ids.push(team_id.to_string());
+        }
+    }
+
+    team_ids.sort();
+    Ok(team_ids)
+}
+
+async fn find_persisted_team_for_thread(
+    codex_home: &Path,
+    caller_thread_id: ThreadId,
+) -> Result<Option<(String, PersistedTeamConfig, CallerTeamRole)>, FunctionCallError> {
+    let caller = caller_thread_id.to_string();
+    let mut matches = Vec::new();
+    for team_id in list_persisted_team_ids(codex_home).await? {
+        let Some(config) = try_read_persisted_team_config(codex_home, &team_id).await? else {
+            continue;
+        };
+        if config.lead_thread_id == caller {
+            matches.push((team_id, config, CallerTeamRole::Lead));
+            continue;
+        }
+        if config
+            .members
+            .iter()
+            .any(|member| member.agent_id == caller)
+        {
+            matches.push((team_id, config, CallerTeamRole::Member));
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "thread `{caller_thread_id}` belongs to multiple teams: {}",
+            matches
+                .into_iter()
+                .map(|(team_id, _, _)| team_id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
 fn assert_team_member_or_lead(
     team_id: &str,
     config: &PersistedTeamConfig,
@@ -649,6 +750,8 @@ impl ToolHandler for MultiAgentHandler {
             "team_inbox_pop" => team_inbox_pop::handle(session, turn, call_id, arguments).await,
             "team_inbox_ack" => team_inbox_ack::handle(session, turn, call_id, arguments).await,
             "team_cleanup" => team_cleanup::handle(session, turn, call_id, arguments).await,
+            "team_current" => team_current::handle(session, turn, call_id, arguments).await,
+            "team_info" => team_info::handle(session, turn, call_id, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -673,6 +776,10 @@ mod send_input;
 mod resume_agent;
 
 mod wait;
+
+mod team_current;
+
+mod team_info;
 
 #[derive(Debug)]
 struct WaitForAgentsResult {

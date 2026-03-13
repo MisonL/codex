@@ -67,9 +67,14 @@ fn is_lead_request(request: &wiremock::Request) -> bool {
     request.headers.get("x-openai-subagent").is_none()
 }
 
+fn is_subagent_request(request: &wiremock::Request) -> bool {
+    request.headers.get("x-openai-subagent").is_some()
+}
+
 fn parse_tool_output_json(mock: &ResponseMock, call_id: &str) -> Result<Option<Value>> {
     if let Some(output) = mock.function_call_output_text(call_id) {
-        let parsed: Value = serde_json::from_str(&output).context("tool output should be JSON")?;
+        let parsed: Value = serde_json::from_str(&output)
+            .with_context(|| format!("tool output should be JSON, got: {output}"))?;
         return Ok(Some(parsed));
     }
 
@@ -615,6 +620,85 @@ async fn spawn_agent_worktree_create_and_close_cleanup() -> Result<()> {
     let close_output = tool_output_json(&close_mock, close_call_id).await?;
     assert_eq!(close_output["status"].is_string(), true);
     assert_eq!(std::fs::metadata(worktree_path).is_err(), true);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_org_team_current_reports_team_for_spawned_member() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable Collab");
+        config
+            .features
+            .enable(Feature::AgentOrg)
+            .expect("enable AgentOrg");
+    });
+    let test = builder.build(&server).await?;
+
+    let team_id = "e2e-team-current";
+    let spawn_call_id = "call-org-spawn-team";
+    let spawn_args = json!({
+        "team_id": team_id,
+        "members": [
+            {"name": "worker", "task": "Call team_current tool.", "agent_type": "develop"}
+        ]
+    })
+    .to_string();
+
+    let spawn_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-spawn-1"),
+                ev_function_call(spawn_call_id, "spawn_team", &spawn_args),
+                ev_completed("resp-org-spawn-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-spawn-1", "spawned"),
+                ev_completed("resp-org-spawn-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let team_current_call_id = "call-team-current";
+    let subagent_mock = mount_sse_sequence_match(
+        &server,
+        is_subagent_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-subagent-1"),
+                ev_function_call(team_current_call_id, "team_current", "{}"),
+                ev_completed("resp-org-subagent-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-subagent-1", "done"),
+                ev_completed("resp-org-subagent-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("spawn org team").await?;
+
+    let spawn_output = tool_output_json(&spawn_mock, spawn_call_id).await?;
+    assert_eq!(spawn_output["team_id"].as_str(), Some(team_id));
+    assert_eq!(spawn_output["members"].as_array().map(Vec::len), Some(1));
+
+    let current_output = tool_output_json(&subagent_mock, team_current_call_id).await?;
+    assert_eq!(current_output["team_id"].as_str(), Some(team_id));
+    assert_eq!(current_output["role"].as_str(), Some("member"));
+    assert_eq!(
+        current_output["lead_thread_id"].as_str().map(str::is_empty),
+        Some(false)
+    );
 
     Ok(())
 }

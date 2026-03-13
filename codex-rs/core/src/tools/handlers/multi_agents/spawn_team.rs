@@ -36,6 +36,13 @@ struct SpawnTeamResult {
     members: Vec<SpawnTeamMemberResult>,
 }
 
+#[derive(Debug)]
+struct SpawnedMemberInput {
+    agent_id: ThreadId,
+    notification_source: Option<SessionSource>,
+    input_items: Vec<UserInput>,
+}
+
 pub async fn handle(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -106,6 +113,7 @@ pub async fn handle(
 
     let mut statuses = HashMap::new();
     let mut spawned_members = Vec::new();
+    let mut spawned_inputs = Vec::new();
 
     for member in &requested_members {
         let member_name = member.name.trim().to_string();
@@ -242,37 +250,6 @@ pub async fn handle(
             }
         }
 
-        if let Err(err) = session
-            .services
-            .agent_control
-            .send_spawn_input(agent_id, input_items, notification_source)
-            .await
-        {
-            if let Some(lease) = worktree_lease {
-                let _ = remove_worktree_lease(&session, &turn, lease).await;
-            }
-            let _ = session
-                .services
-                .agent_control
-                .shutdown_agent(agent_id)
-                .await;
-            cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
-            let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
-            session
-                .send_event(
-                    &turn,
-                    CollabWaitingEndEvent {
-                        sender_thread_id: session.conversation_id,
-                        call_id: event_call_id,
-                        agent_statuses,
-                        statuses,
-                    }
-                    .into(),
-                )
-                .await;
-            return Err(collab_spawn_error(err));
-        }
-
         if let Some(lease) = worktree_lease {
             register_worktree_lease(agent_id, lease);
         }
@@ -286,6 +263,11 @@ pub async fn handle(
             name: member_name,
             agent_id,
             agent_type: member.agent_type.clone(),
+        });
+        spawned_inputs.push(SpawnedMemberInput {
+            agent_id,
+            notification_source,
+            input_items,
         });
     }
     let team_record = TeamRecord {
@@ -341,6 +323,38 @@ pub async fn handle(
             )
             .await;
         return Err(err);
+    }
+
+    for SpawnedMemberInput {
+        agent_id,
+        notification_source,
+        input_items,
+    } in spawned_inputs
+    {
+        if let Err(err) = session
+            .services
+            .agent_control
+            .send_spawn_input(agent_id, input_items, notification_source)
+            .await
+        {
+            let _ = remove_team_record(session.conversation_id, &team_id);
+            let _ = remove_team_persistence(turn.config.codex_home.as_path(), &team_id).await;
+            cleanup_spawned_team_members(&session, &turn, &spawned_members).await;
+            let agent_statuses = team_member_status_entries(&spawned_members, &statuses);
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.conversation_id,
+                        call_id: event_call_id,
+                        agent_statuses,
+                        statuses,
+                    }
+                    .into(),
+                )
+                .await;
+            return Err(collab_spawn_error(err));
+        }
     }
 
     let agent_statuses = team_member_status_entries(&spawned_members, &statuses);

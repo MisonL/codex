@@ -38,6 +38,7 @@ pub(crate) async fn apply_role_to_config(
     role_name: Option<&str>,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    let previous_features = config.features.clone();
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let (config_file, is_built_in) = resolve_role_config(config, role_name)
         .map(|role| (&role.config_file, is_built_in))
@@ -70,6 +71,7 @@ pub(crate) async fn apply_role_to_config(
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     let role_layer_toml = resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    let role_selects_features = role_layer_toml.get("features").is_some();
     let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
     let role_updates_active_profile_provider = config
@@ -129,6 +131,9 @@ pub(crate) async fn apply_role_to_config(
     )
     .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     *config = next_config;
+    if !role_selects_features {
+        config.features = previous_features;
+    }
 
     Ok(())
 }
