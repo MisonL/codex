@@ -11,6 +11,28 @@ This document proposes a next iteration of Codex "Agent Teams" that:
 
 The proposal is intentionally incremental and reuses the existing durable inbox + persisted tasks primitives described in `docs/agent-teams.md`.
 
+## 0. Positioning (Built on Existing Swarm Architecture)
+
+This proposal is a focused "Agent Teams" enhancement that sits inside the broader multi-agent control-plane direction described in:
+
+- `docs/plans/2026-03-06-codex-swarm-architecture.md`
+
+In particular, it follows the same core principle:
+
+- Add a small control plane layer, minimize changes to the data plane, and avoid rewriting the execution plane.
+
+How this document maps to the earlier design:
+
+- Control-plane objects:
+  - `Org` (President + team leaders) is a lightweight slice of the proposed `SwarmRun` (kind: `swarm`).
+  - `Team` remains the existing `team_id`-scoped workflow (kind: `team`), but we add missing semantics (mesh messaging, leader delegation, multi-assignee tasks).
+- Task model:
+  - Multi-assignee tasks extend the earlier `TaskSpec` idea by tracking per-assignee state, without forcing the leader to pre-split work.
+- Observability and replay:
+  - Team/org messages and task transitions should carry a stable envelope (`swarmRunId`, `teamId`, `taskId`, `sequence`, `causalParent`) so the system remains auditable and replayable.
+- Memory model:
+  - Keep thread work memory isolated by default; share via explicit, published artifacts when content is large or should be durable.
+
 ## 1. Goals
 
 1. Team members can directly coordinate with each other using team-scoped tools.
@@ -64,6 +86,19 @@ Observed gaps for "real teams":
 1. **Team Member**
 - A normal agent thread in a team.
 - Can coordinate directly with peers in the same team.
+
+### 4.3 Envelope (Swarm-style Metadata)
+
+To align with the `swarm envelope` direction from `2026-03-06-codex-swarm-architecture.md`, the following metadata should be present (at least in persisted state, and ideally also in emitted events):
+
+- `swarmRunId`: the Org id (President-managed "swarm run" scope)
+- `teamId`: the team id
+- `agentId`: sender/receiver thread id
+- `taskId`: optional; set when the message or state transition is tied to a task
+- `sequence`: monotonic sequence per `(swarmRunId, teamId)` for deterministic replay
+- `causalParent`: optional causal link (for example: "this message was sent in response to task X claim")
+
+This proposal does not require changing the existing `item` model; it only requires enriching persisted records and collab events with stable identifiers.
 
 ## 5. Mesh Collaboration Inside a Team
 
@@ -137,6 +172,8 @@ Replace single `assignee` with `assignees`:
 - `assignee_state: { "<agent_id>": "pending" | "claimed" | "completed" }`
 - `claim_mode: "shared" | "exclusive"`
 - `completion_mode: "all_assignees" | "any_assignee" | "leader_approves"`
+- `lease_until`: optional; aligns with the earlier `TaskSpec.lease_until` / `Lease` concepts for long-running ownership
+- `artifacts`: optional; artifact references published by assignees (see below)
 
 Defaults:
 
@@ -243,7 +280,22 @@ To match the mental model of "a team has a leader agent":
 
 The spawning thread (President) remains the owner for cleanup and auditing, but does not need to micromanage team operations.
 
-## 9. Example End-to-end Flow
+## 9. Artifacts (Explicit Sharing, Not Shared Context)
+
+To stay consistent with the earlier "default isolation, share via artifact" guidance:
+
+1. Team messages should be short and coordination-oriented.
+1. Non-trivial outputs (plans, summaries, patch sets, reviews, tables) should be published as explicit artifacts and referenced by id.
+
+Follow-on control-plane tools (not required for the first milestone) that would make this practical:
+
+- `team_artifact_publish`: create an artifact in the team scope.
+- `team_artifact_read`: read an artifact.
+- `team_artifact_list`: list artifacts for a task/team.
+
+These map directly to the `Artifact` object described in `2026-03-06-codex-swarm-architecture.md`.
+
+## 10. Example End-to-end Flow
 
 ### 9.1 President creates two teams and appoints leaders
 
@@ -263,7 +315,7 @@ The spawning thread (President) remains the owner for cleanup and auditing, but 
 1. `org_leader_message` from `lead-a` to `lead-b`.
 1. `lead-b` forwards relevant details to Team B members via `team_broadcast` or `team_message`.
 
-## 10. Incremental Implementation Plan
+## 11. Incremental Implementation Plan
 
 1. Mesh messaging:
 - Add `team_info`.
@@ -282,7 +334,7 @@ The spawning thread (President) remains the owner for cleanup and auditing, but 
 1. UX follow-ons:
 - TUI overlays for org/team inboxes and task state summaries.
 
-## 11. Compatibility and Migration
+## 12. Compatibility and Migration
 
 1. Keep v1 tool names where possible; change behavior in a backward-compatible way where feasible.
 1. Version persisted schemas:
@@ -290,4 +342,3 @@ The spawning thread (President) remains the owner for cleanup and auditing, but 
 1. Provide a migration path for v1 teams:
 - v1 team config: `leaders = []` implies "no delegated leader" and defaults to President-only broadcast/task creation.
 - v1 tasks map to v2 tasks with `assignees = [assignee]`.
-
