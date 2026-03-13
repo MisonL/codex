@@ -2079,20 +2079,6 @@ if (-not `$hasStateDirOverride) {
     Set-Content -LiteralPath $WrapperPath -Value $content -Encoding UTF8
 }
 
-function Create-Wrappers {
-    param(
-        [string]$CurrentCommandDir,
-        [string]$BinaryPath,
-        [string]$ControllerPath
-    )
-
-    Ensure-DirWritable $CurrentCommandDir
-    Generate-HodexCmdWrapper -WrapperPath (Join-Path $CurrentCommandDir "hodex.cmd") -BinaryPath $BinaryPath
-    Generate-HodexPs1Wrapper -WrapperPath (Join-Path $CurrentCommandDir "hodex.ps1") -BinaryPath $BinaryPath
-    Generate-HodexctlCmdWrapper -WrapperPath (Join-Path $CurrentCommandDir "hodexctl.cmd") -ControllerPath $ControllerPath
-    Generate-HodexctlPs1Wrapper -WrapperPath (Join-Path $CurrentCommandDir "hodexctl.ps1") -ControllerPath $ControllerPath
-}
-
 function Remove-ManagedRuntimeWrappersFromDir {
     param([string]$CommandDir)
 
@@ -3676,7 +3662,7 @@ function Get-SourceActivationMode {
     return "no"
 }
 
-function Invoke-SourceBuild {
+function Invoke-SourceSync {
     param(
         [string]$ProfileName,
         [string]$ActivationMode = "preserve",
@@ -3765,7 +3751,7 @@ function Invoke-SourceInstall {
         return
     }
     $profileName = Resolve-SourceProfileName -RequireExisting $false
-    Invoke-SourceBuild -ProfileName $profileName -ActivationMode "no" -ActionLabel "Download source and prepare toolchain" -SkipPlanConfirm
+    Invoke-SourceSync -ProfileName $profileName -ActivationMode "no" -ActionLabel "Download source and prepare toolchain" -SkipPlanConfirm
 }
 
 function Invoke-SourceUpdate {
@@ -3777,7 +3763,7 @@ function Invoke-SourceUpdate {
     if (-not $script:ExplicitSourceRef) {
         $script:SourceRef = [string]$existing.current_ref
     }
-    Invoke-SourceBuild -ProfileName $profileName -ActivationMode "no" -ActionLabel "Update source"
+    Invoke-SourceSync -ProfileName $profileName -ActivationMode "no" -ActionLabel "Update source"
 }
 
 function Invoke-SourceRebuild {
@@ -3798,7 +3784,7 @@ function Invoke-SourceSwitch {
             Fail "source switch requires -Ref to specify branch/tag/commit."
         }
     }
-    Invoke-SourceBuild -ProfileName $profileName -ActivationMode "no" -ActionLabel "Switch ref and sync source"
+    Invoke-SourceSync -ProfileName $profileName -ActivationMode "no" -ActionLabel "Switch ref and sync source"
 }
 
 function Invoke-SourceStatus {

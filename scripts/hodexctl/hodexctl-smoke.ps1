@@ -291,6 +291,25 @@ try {
     Assert-Contains -Text $wrapperContent -Expected ('$forwardedArgs = @($args)')
     Assert-Contains -Text $wrapperContent -Expected ('@("-StateDir", "' + $customStateDir + '") + $forwardedArgs')
 
+    if ($env:OS -ne "Windows_NT") {
+        Write-Host "==> Check install-hodexctl.ps1 fails cleanly on non-Windows"
+        $installScriptPath = Join-Path (Split-Path -Parent $scriptDir) 'install-hodexctl.ps1'
+        $nonWindowsInstallResult = Invoke-RunnerCapture -Runner $runner -ArgumentList @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $installScriptPath
+        )
+        if ($nonWindowsInstallResult.ExitCode -ne 1) { throw "Expected exit code 1 on non-Windows installer run; got: $($nonWindowsInstallResult.ExitCode)" }
+        if (-not [string]::IsNullOrWhiteSpace($nonWindowsInstallResult.StdOut)) {
+            throw "Expected empty stdout for non-Windows installer failure; got:`n$($nonWindowsInstallResult.StdOut)"
+        }
+        Assert-Contains -Text $nonWindowsInstallResult.StdErr -Expected "This installer supports Windows PowerShell only; use install-hodexctl.sh on macOS/Linux/WSL."
+        if ($nonWindowsInstallResult.StdErr -like "*CategoryInfo*") { throw "Unexpected PowerShell CategoryInfo noise in non-Windows installer output" }
+        if ($nonWindowsInstallResult.StdErr -like "*FullyQualifiedErrorId*") { throw "Unexpected PowerShell FullyQualifiedErrorId noise in non-Windows installer output" }
+        if ($nonWindowsInstallResult.StdErr -like "*Line |*") { throw "Unexpected PowerShell location noise in non-Windows installer output" }
+        if ($nonWindowsInstallResult.StdErr -like "*At line:*") { throw "Unexpected PowerShell location noise in non-Windows installer output" }
+    }
+
     if ($env:OS -eq "Windows_NT") {
         $statusViaWrapper = (& $runner -NoProfile -File $wrapperPath status 2>&1 | Out-String)
         Assert-Contains -Text $statusViaWrapper -Expected ("State dir: " + $customStateDir)

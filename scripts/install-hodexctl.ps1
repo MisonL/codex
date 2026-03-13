@@ -18,6 +18,12 @@ $resolvedStateDir = if ($stateDir) {
 $resolvedCommandDir = if ($commandDir) { $commandDir } else { Join-Path $resolvedStateDir "commands" }
 $resolvedWrapperCmd = Join-Path $resolvedCommandDir "hodexctl.cmd"
 
+function Fail-Installer {
+  param([string]$Message)
+  [Console]::Error.WriteLine($Message)
+  exit 1
+}
+
 function Refresh-SessionPathFromRegistry {
   $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -39,14 +45,40 @@ function Refresh-SessionPathFromRegistry {
   }
 }
 
+function Invoke-ControllerDownloadWithRetry {
+  param(
+    [string]$Uri,
+    [string]$OutFile
+  )
+
+  $delayMilliseconds = 1000
+  $lastMessage = ""
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      Invoke-WebRequest -Uri $Uri -OutFile $OutFile
+      return
+    } catch {
+      $lastMessage = $_.Exception.Message
+      if ($attempt -eq 3) {
+        throw "Failed to download hodexctl manager script from ${Uri}: $lastMessage"
+      }
+      Start-Sleep -Milliseconds $delayMilliseconds
+      $delayMilliseconds *= 2
+    }
+  }
+}
+
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 $controllerPath = Join-Path $tempRoot "hodexctl.ps1"
 
 try {
+  if ($env:OS -ne "Windows_NT") {
+    Fail-Installer "This installer supports Windows PowerShell only; use install-hodexctl.sh on macOS/Linux/WSL."
+  }
   $ProgressPreference = "SilentlyContinue"
   New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
   Write-Host "==> Download hodexctl manager script"
-  Invoke-WebRequest -Uri $controllerUrl -OutFile $controllerPath
+  Invoke-ControllerDownloadWithRetry -Uri $controllerUrl -OutFile $controllerPath
 
   $argumentList = @(
     "-NoProfile",
@@ -77,7 +109,7 @@ try {
   Write-Host "==> Start hodexctl initial install"
   & $runner @argumentList
   if ($LASTEXITCODE -ne 0) {
-    throw "hodexctl manager-install failed, exit code: $LASTEXITCODE"
+    Fail-Installer "hodexctl manager-install failed, exit code: $LASTEXITCODE"
   }
 
   Write-Host "==> Install complete"
@@ -94,6 +126,15 @@ try {
       Write-Host "==> Command dir added to current session PATH; you can run: hodexctl status"
     }
   }
+} catch {
+  $message = $_.Exception.Message
+  if ([string]::IsNullOrWhiteSpace($message)) {
+    $message = ($_ | Out-String).Trim()
+  }
+  if ([string]::IsNullOrWhiteSpace($message)) {
+    $message = "Failed to install hodexctl."
+  }
+  Fail-Installer $message
 } finally {
   $ProgressPreference = $originalProgressPreference
   if (Test-Path $tempRoot) {
