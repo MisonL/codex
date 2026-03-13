@@ -522,10 +522,15 @@ mod tests {
         let child = AbsolutePathBuf::try_from(tmp.path().join("nested/file.txt")).expect("abs");
         let mut store = ApprovalStore::default();
         store.approve_write_roots(vec![root.clone()]);
+        let normalized_root = store
+            .approved_write_roots
+            .first()
+            .cloned()
+            .expect("normalized root");
 
         assert_eq!(
             matching_write_roots([&child], &store.approved_write_roots),
-            Some(vec![root])
+            Some(vec![normalized_root])
         );
     }
 

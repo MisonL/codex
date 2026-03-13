@@ -129,6 +129,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable Agent Organization (Agent Org) features (experimental).
+    AgentOrg,
     /// Enable apps.
     Apps,
     /// Enable plugins.
@@ -646,6 +648,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Multi-agents",
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
             announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AgentOrg,
+        key: "agent_org",
+        stage: Stage::Experimental {
+            name: "Agent Org",
+            menu_description: "Enable Agent Organization (Agent Org) semantics on top of multi-agent teams: org metadata, role-aware routing, controlled recruitment, and principal-only cross-team messaging.",
+            announcement: "NEW: Agent Org is now available as an experimental feature. Enable in /experimental and restart Codex to activate it.",
         },
         default_enabled: false,
     },
