@@ -119,16 +119,62 @@
 
 本节用于让设计可验证, 降低 "看起来没问题" 的漂移.
 
-- **主要设定值:** 在 `agent_org` 启用时, 团队内点对点协作 + 多 assignee 任务 + 仅 principals 跨 team 边界 + 受控招募与 profile/元数据语境注入; 在 `agent_org` 未启用时, v1 行为必须完全不变.
-- **验收标准 (必须可在代码中测试):**
+- **主要设定值 (Primary Setpoint):**
+  - `agent_org` 启用时: 团队内 mesh 协作 + 多 assignee 任务 + 仅 principals 跨 team 边界 + 受控招募与 profile/org 元数据语境注入.
+  - `agent_org` 未启用时: v1 行为必须完全不变 (包含工具授权与持久化格式兼容).
+- **验收标准 (Acceptance, 必须可在代码中测试):**
   - `agent_org` 默认关闭, 且未启用时不暴露 v2 新工具 (至少: `org_update_config`, `org_profile_update_self`, `team_template_upsert`, `team_recruit`).
-  - 任意 teammate 可以在同一 `team_id` 内对任意其他 teammate 执行 `team_message`, 并且会追加一条持久化 inbox 记录.
+  - 任意 teammate 可以在同一 `team_id` 内对任意其他 teammate 执行 `team_message`, 且会追加 1 条 durable inbox 记录 (先持久化, 再尽力投递).
   - 非 principal 的跨 team 消息必须被拒绝 (仅 principals/President 可通过 `org_*`).
   - 当目标 thread 已注册到 org/team 时, `send_input` / `close_agent` / `resume_agent` 不得绕过 org/team 策略边界.
   - 多 assignee 任务必须遵守 `claimMode` + `completionMode`, 且 `leader_approves` 必须有显式批准执行器.
   - `team_recruit` 必须写入持久化成员引用 (team config + inbox), 并为新成员初始化 profile (若提供), 且追加控制面事件.
-- **约束:** durable-first; `$CODEX_HOME` 下的持久化状态是授权真相; 禁止静默回退路径.
-- **传感器/证据:** `$CODEX_HOME/teams/*/config.json`, `inbox/*.jsonl`, `$CODEX_HOME/orgs/*/config.json`, `profiles/*.json`, `recruitment/templates/*.json`, `tasks/*.json`, `events.jsonl` (以及对应 lock 文件).
+- **护栏指标 (Guardrails):**
+  - 授权护栏: 禁止出现 "跨 team 直连 member" 与 "member 调用 org_*" 的可达路径.
+  - 状态护栏: `config.json` / task snapshot 必须原子写; JSONL append 必须加锁; `sequence` 必须单调递增且可回放.
+  - 成本护栏: 招募/广播必须可配额; 超额必须显式失败, 不得静默.
+- **采样与验证计划 (Sampling Plan):**
+  - L0: 仅 `agent_org` 关闭的回归覆盖 (确保 v1 无漂移).
+  - L1: `agent_org` 打开时的最小端到端集成测试覆盖 (team mesh / principals channel / recruit / multi-assignee task).
+  - L2: 长链路验证 (TUI overlays + app-server v2 资源化接口) 作为后续阶段门禁, 不作为早期必要条件.
+- **恢复目标 (Recovery Target):**
+  - 任何阶段出现越权、持久化破坏或不可回放状态时, 允许通过关闭 `agent_org` 立即回到 v1 行为 (不依赖手工修文件).
+- **回滚触发 (Rollback Triggers):**
+  - 发现跨 team 越权消息可达, 或持久化 schema 产生不可逆破坏.
+  - 事件序列不单调/不可回放, 或出现 "半成功" 的状态迁移.
+- **硬约束 (Constraints):** durable-first; `$CODEX_HOME` 下的持久化状态是授权真相; 禁止静默回退路径.
+- **传感器/证据 (Sensors):** `$CODEX_HOME/teams/*/config.json`, `inbox/*.jsonl`, `$CODEX_HOME/orgs/*/config.json`, `profiles/*.json`, `recruitment/templates/*.json`, `tasks/*.json`, `events.jsonl` (以及对应 lock 文件).
+
+## 0.6 第一性原理: 组织作为可控系统 (Pinned)
+
+现代顶尖软件公司的组织设计并不神秘, 其核心是解决三个不可避免的问题:
+
+1. **并行化:** 单个个体无法覆盖全部工作, 必须用团队与分工提高吞吐.
+1. **可治理:** 并行会引入沟通与协调成本, 必须用边界与流程降低熵增.
+1. **可持续:** 交付不是终点, 运行、故障与复盘要求系统可观测、可恢复、可审计.
+
+Agent Org 的顶层设计按控制论拆成三面:
+
+- **控制面 (Control Plane):** org/team 配置、角色与授权、预算/配额、招募与任命、任务分派与审批.
+- **数据面 (Data Plane):** 具体的协作执行 (消息投递、任务 claim/complete、artifact 发布与读取).
+- **状态面 (State Plane):** durable-first 的事实源 (configs/inbox/tasks/events/profiles/templates).
+
+对应到产品原语, 最小且可组合的一组对象是:
+
+- **边界:** `Org` (跨 team 边界与治理) + `Team` (团队内协作边界)
+- **身份:** `ThreadId` (最小执行单元, 也是授权主体)
+- **工作:** `Task` (可分派、可回放的工作项; 支持多 assignee)
+- **沟通:** `InboxEntry` (可审计的消息投递记录; team scope 与 org scope)
+- **产物:** `Artifact` (显式共享, 替代默认共享上下文)
+- **审计:** `events.jsonl` + `sequence` + `causalParent` (确定性回放与责任归因)
+
+组织的基本闭环在本系统中映射为:
+
+- Plan: 通过任务与 artifact (PRD/RFC/计划) 把目标显式化
+- Build: 通过多 assignee 协作并产出 patch/test 产物
+- Ship: 通过 leader/owner 的显式批准将变更收口 (不依赖隐式约定)
+- Run: 通过事件/任务表达 incident 与修复, 并用 principals channel 协调跨 team
+- Learn: 通过复盘 artifact 固化经验, 回写模板/策略 (而不是只靠聊天记忆)
 
 ## 1. 目标
 
@@ -653,8 +699,8 @@ template/profile/org/team 更新 (tools)
 
 - `team_id`
 - `org_id` (可选)
-- `role`: `"member" | "leader"` (或空)
-- `team_owner_thread_id` (为兼容性在配置中持久化为 `leadThreadId`)
+- `role`: `"member" | "lead"` (或空; `lead` 表示团队 owner, 对应 `leadThreadId`)
+- `lead_thread_id` (团队 owner; 为兼容性在配置中持久化为 `leadThreadId`)
 - `org_president_thread_id` (可选; 当 `org_id` 存在时从 org config 读取)
 
 固定要求:
@@ -667,9 +713,9 @@ template/profile/org/team 更新 (tools)
 返回团队自组织所需的元信息:
 
 - `team_id`, `org_id` (未注册到 org 时可为空)
-- `team_owner_thread_id` (为兼容性持久化为 `leadThreadId`)
+- `lead_thread_id` (团队 owner; 为兼容性持久化为 `leadThreadId`)
 - `org_president_thread_id` (可选)
-- `leaders` (thread ids 与 names)
+- `leaders` (thread ids 与 names; 当 team config 尚未引入 `leaders[]` 时可为空)
 - `members` (thread ids、names、可选 agent roles)
 - 可选: 消息策略 (见下文)
 
@@ -866,12 +912,12 @@ org 层即为边界强制执行的机制基础.
 ### 7.3 Org 工具 (new)
 
 1. `org_info`: 列出 org 内 teams 与 principals (owners/leaders/president).
-1. `org_leader_message`: principal -> principal 消息, 依据 org config 校验.
+1. `org_principal_message`: principal -> principal 消息, 依据 org config 校验.
 1. `org_inbox_pop` / `org_inbox_ack`: 读取与 ack org 范围消息.
 
 授权:
 
-- `org_leader_message` 仅允许:
+- `org_principal_message` 仅允许:
   - President thread, 或
   - org 内任一 team 的 leader thread, 或
   - org 内任一 team 的 owner thread
@@ -886,7 +932,7 @@ org 层即为边界强制执行的机制基础.
 1. 限制 teammate threads 使用通用 agent-to-agent 工具 (至少: `send_input`, `close_agent`, `resume_agent`).
 1. 确保 teammates 拥有可用的替代表面:
    - team 内: `team_message` / `team_broadcast` (策略约束) + inbox 工具.
-   - 跨 team: 仅 team leaders 使用 `org_leader_message`, 然后通过 `team_*` 转发给成员.
+   - 跨 team: 仅 principals 使用 `org_principal_message`, 然后通过 `team_*` 转发给成员.
 
 固定策略:
 
@@ -932,6 +978,19 @@ org 层即为边界强制执行的机制基础.
 1. team 消息应尽量短, 以协作为主.
 1. 非 trivial 的产物 (计划、总结、patch 集、评审、表格等) 应通过显式 artifact 发布并以 id 引用.
 
+推荐的 artifact kind 口径 (用于组织化产物, 不参与授权):
+
+- `prd`: 需求描述与验收口径
+- `rfc`: 设计提案与取舍
+- `adr`: 架构决策记录 (含备选方案与被拒绝原因)
+- `plan`: 执行计划与拆解
+- `patch`: 代码变更产物 (可对应 PR 或 patchset)
+- `review`: 评审意见 (设计/代码/上线)
+- `release_plan`: 发布/灰度/回滚计划
+- `runbook`: 运行手册与应急预案
+- `postmortem`: 事故复盘
+- `summary`: 周报/里程碑摘要
+
 后续可跟进的控制面工具 (第一阶段非必需), 用于让 artifact 更易用:
 
 - `team_artifact_publish`: 在 team scope 创建 artifact
@@ -961,8 +1020,30 @@ org 层即为边界强制执行的机制基础.
 
 ### 10.3 Team A leader 与 Team B leader 沟通
 
-1. `org_leader_message` 从 `lead-a` 发给 `lead-b`.
+1. `org_principal_message` 从 `lead-a` 发给 `lead-b`.
 1. `lead-b` 通过 `team_broadcast` 或 `team_message` 将关键信息转达给 Team B 成员.
+
+### 10.4 从需求到合并: 现代研发主路径 (示例)
+
+1. President/Owner 为该项目建立最小 setpoint 与护栏 (质量/成本/边界), 并通过 org 元数据固化 (mission/values + vibe).
+1. PM (team member) 发布 `prd` artifact, 明确验收标准与约束.
+1. Tech lead (team leader) 发布 `rfc` artifact, 组织评审并记录取舍; 涉及跨 team 依赖时, 通过 principals channel 与相关 leaders 对齐.
+1. leader 通过 `team_task_create` 将同一工作项分派给多名 assignees (DEV/QA/Design 等), 由成员自组织拆分并通过 team mesh 协商依赖.
+1. assignees 发布 `patch` / `review` / `summary` artifacts, leader 汇总并执行必要审批 (例如 `leader_approves` 完成模式).
+1. 完成后输出面向 President 的简短 `summary` 作为 status card (避免主 transcript 被内部细节淹没).
+
+### 10.5 故障应急与复盘: 运行闭环 (示例, 仅规划)
+
+1. President 接到故障信号后, 指派相关 team owners/leaders 建立处理边界 (谁决策, 谁执行, 谁同步对外).
+1. 通过 `org_principal_message` 在 principals channel 中发起跨 team 协调, 每个 leader 再在 team 内广播/分派任务.
+1. 关键动作一律以 task + artifact 表达:
+   - `runbook` (止血步骤与回滚策略)
+   - `patch` (修复)
+   - `postmortem` (复盘与行动项)
+1. 复盘结论回写到模板/策略:
+   - 更新招募模板 (例如补齐 SRE/QA 画像)
+   - 更新团队协作协议 (kickoff 模板与 Definition of Done)
+   - 更新 org values/guardrails (例如对 broadcast、招募、审批的治理口径)
 
 ## 11. TUI UX (用户反馈 + 控制界面)
 
@@ -1081,6 +1162,13 @@ TUI 已有 slash commands 与选择视图. 增加 team/org 入口:
 
 ## 12. 增量实现计划
 
+按风险与耦合从低到高, 落地模块依赖关系如下:
+
+- `codex-rs/core`: feature gate、工具授权、持久化读写、事件日志 (本提案主落点, 必须先做)
+- `codex-rs/protocol` / `codex-rs/app-server(-protocol)`: envelope 补齐与资源化 API (用于多观察者订阅/重连回放, 可后置)
+- `codex-rs/tui`: org/team 仪表盘与 inbox/task overlays (可后置, 先保证控制面与工具语义)
+- `docs/`: 行为口径与迁移说明 (每次新增/变更 API 必须同步)
+
 1. Feature gate (硬前置):
    - 新增 `agent_org` feature flag (Stage::Experimental), 默认关闭.
    - 所有 v2 新工具与行为变更必须在 `agent_org` 启用时才生效; 未启用时 v1 行为必须完全不变.
@@ -1126,3 +1214,321 @@ TUI 已有 slash commands 与选择视图. 增加 team/org 入口:
 1. 为 v1 teams 提供迁移路径:
    - v1 team config: `leaders = []` 表示 "无委派 leader", 默认 broadcast/task create 由 President-only 执行.
    - v1 tasks 映射为 v2 tasks: `assignees = [assignee]`, `claimMode = exclusive`, `completionMode = any_assignee`.
+
+## 14. 产品功能规划 (完整清单)
+
+本节将本提案收敛为可实施的产品功能清单, 以便后续按阶段交付. 术语沿用前文 (President/Owner/Leader/Member; Org/Team; profile/template).
+
+### 14.1 角色与权限矩阵 (产品口径)
+
+固定原则:
+
+- 授权只看持久化控制面状态 (org/team config), 不看 prompt, 不看 profile/template.
+- 所有可越权的通用工具必须做 target-based authorization, 并在 `agent_org` 启用后强制边界.
+
+能力矩阵 (最小集合):
+
+1. President
+   - Org: 创建/更新 org 元数据, 注册/解绑 team, 招募 owners, 跨 team 协调
+   - Team: 可 override team owner 的治理动作 (用于紧急处置与组织扩张)
+1. Team owner (`leadThreadId`)
+   - Team: 配置治理 (leaders/broadcastPolicy), 任命 leaders, 招募成员, 任务分派与审批
+1. Team leader (`leaders[]`)
+   - Team: 团队内 mesh 协作, 广播 (受 broadcastPolicy 约束), 多 assignee 任务创建/分派/审批, 招募成员, 跨 team (principal) 沟通
+1. Team member
+   - Team: 团队内 mesh 协作, 任务 claim/complete, 产物发布 (artifact), 自己 profile 更新, 向 leader 升级 (team_ask_lead)
+
+### 14.2 Org 元数据与 Vibe (世界观环境)
+
+产品目标:
+
+- Org 需要一个稳定的 "组织身份" 与 "运行环境" 作为协作语境锚点, 且可扩展.
+- 默认环境为 "当下真实世界" (`vibeId = "real_world_now"`), 未来通过 "Vibe" 功能扩展更多环境要素.
+
+最小可用字段:
+
+- `environment.vibeId` (默认 `real_world_now`)
+- `mission` / `vision` / `values[]`
+- `orgName` (可选)
+
+Vibe 扩展接口 (仅规划, 本期不实现):
+
+```json
+{
+  "vibeId": "real_world_now",
+  "era": "present",
+  "locale": "default",
+  "constraints": ["no_magic", "no_time_travel"],
+  "style": { "tone": "professional", "riskPreference": "balanced" }
+}
+```
+
+固定约束:
+
+- Vibe 只用于语境与提示构造, 不得改变授权边界.
+- Vibe/使命/价值观的注入必须可追溯 (体现在控制面事件里, 并可在调试输出中定位来源).
+
+### 14.3 成员 Profile (可自定义属性)
+
+产品目标:
+
+- 让每个成员拥有可持久化的人设/属性, 用于协作语境与角色分工.
+- 支持成员自维护, 支持招募时初始化, 支持模板复用.
+
+Profile 字段范围 (建议口径: "可协作的人设与能力画像", 不参与授权):
+
+- 基础身份 (可选): `displayName`, `gender`, `age`, `education`, `yearsOfExperience`, `jobTitle`
+- 职业能力: `skills[]`, `strengths[]`
+- 兴趣倾向: `interests[]`
+- 健康字段: 仅允许自由文本 (`health`), 不做结构化推断, 不参与任何授权或调度
+- 扩展字段: `extra` (任意键值, 用于容纳未来更多自定义属性)
+
+权限规则:
+
+- 默认仅允许 self update.
+- leader/owner/president 仅允许在招募时创建或初始化 profile, 后续更新由本人完成.
+
+### 14.4 招募系统 (Recruitment)
+
+产品目标:
+
+- leader/owner/president 能 "按需补充人力", 而无需开放 `spawn_*` 给 teammate 绕行.
+- 支持临时招募与长期编制, 支持保存模板, 支持批量与差异化.
+
+招募对象与 scope:
+
+- `team_recruit`: 招募 team members (以及可选: 由 owner/President 任命 leaders)
+- `org_recruit`: 招募 team owners (以及 org 级治理角色)
+
+模板:
+
+- Team scope templates: 让 leader 快速补齐成员 (UI/PM/DEV/QA 等)
+- Org scope templates: 让 President 快速补齐 owners (中层管理)
+- 模板需要支持:
+  - `spawn` 偏好 (role/model/worktree/background 等)
+  - `profile` 初始化 (可部分覆盖)
+  - `quantity` + `overrides` (差异化招募)
+
+无模板招募 (必须支持):
+
+- leader/owner 可以在招募请求里直接提供 "成员画像草案" (例如需要 UI, 需要 PM, 需要两个开发, 需要测试), 工具将其持久化为 profile 的初始化内容 (必要字段缺失时允许为空).
+- 若需要复用, 可将该画像草案提升为模板并通过 `team_template_upsert` / `org_template_upsert` 保存.
+
+临时招募 (仅规划, 本期不实现):
+
+- 支持为招募成员设置 `leaseUntil` 或 `temporary: true`, 以便任务结束后可被显式 demobilize:
+  - `team_member_remove` / `org_owner_remove` (受权限约束)
+  - 必须持久化并追加事件, 不得仅停留在内存
+
+### 14.5 团队内协作 (Team Mesh)
+
+产品目标:
+
+- team 是一个完整协作单元, 成员之间可直接沟通与协作, 不再是围绕 lead 的星型结构.
+
+最小能力:
+
+- `team_current`: 让 teammate 自发现团队上下文 (teamId/orgId/角色)
+- `team_info`: 让 teammate 在授权范围内读取团队元信息 (用于构造消息路由与 UI)
+- `team_message`: member <-> member, leader <-> member, owner <-> member (均在 team scope 内)
+- `team_broadcast`: 受 `broadcastPolicy` 约束的广播
+- `team_inbox_pop` / `team_inbox_ack`: durable-first 的消息接收与确认
+
+### 14.6 跨 Team 协作 (Org Principals Channel)
+
+产品目标:
+
+- 跨 team 的入口/出口必须收敛, 默认只允许 principals 互通, 再由 leader 向下传达.
+
+最小能力:
+
+- `org_create` / `org_update_config` / `org_info`
+- `org_register_team` / `org_unregister_team` (或等价)
+- `org_principal_message` (principal -> principal)
+- `org_inbox_pop` / `org_inbox_ack`
+
+边界强制:
+
+- team members 不得使用 `org_*` 工具发送跨 team 消息.
+- 通用工具对 target thread 的授权不得绕行 org/team 边界.
+
+### 14.7 多 Assignee 任务 (单任务多人协作)
+
+产品目标:
+
+- leader 能将同一任务直接分派给多人, 由多人自组织拆分, 而不是 leader 先做边界切分.
+
+最小能力:
+
+- `team_task_create`: 支持 `assignees[]`, `claimMode`, `completionMode`
+- `team_task_claim`: 支持 shared claim 或 exclusive claim
+- `team_task_complete`: 记录 per-assignee 完成, 推导 task-level 完成
+- `team_task_assign`: 动态增删 assignees
+- `team_task_approve`: 当 `completionMode = leader_approves` 时启用
+
+固定约束:
+
+- per-assignee state 是权威真相, task-level `state` 只能派生.
+- 任何状态迁移必须追加控制面事件, 并可从事件回放重建.
+
+### 14.8 工程产物与评审 (Artifacts + Reviews)
+
+产品目标:
+
+- 用 artifact 将 "决策/评审/验收" 从聊天中抽离, 形成可回放的事实源.
+- 让 review 成为可授权、可审计、可拒绝的控制面动作, 不依赖 prompt 约定.
+
+最小能力 (仅规划):
+
+- Team scope:
+  - `team_artifact_publish` / `team_artifact_read` / `team_artifact_list`
+  - `team_artifact_review_request` (leader/owner 发起, 指定 reviewers)
+  - `team_artifact_review_submit` (reviewer 提交 `approve|reject` + notes)
+- Org scope (跨 team 的 RFC/复盘等):
+  - `org_artifact_publish` / `org_artifact_read` / `org_artifact_list`
+  - `org_artifact_review_request` / `org_artifact_review_submit` (仅 principals)
+
+固定约束:
+
+- review 不改变授权边界, 但可以作为 task 完成/发布的前置条件 (与 `leader_approves` completionMode 对齐).
+- review 结果必须写入控制面事件日志, 并可从 events 回放重建.
+
+### 14.9 团队章程与工作协议 (Team Charter + Working Agreement)
+
+产品目标:
+
+- 让 "团队负责什么" 和 "如何协作" 变成持久化、可引用的组织知识, 便于新人/新招募成员快速对齐.
+
+最小字段 (建议, 仅用于语境注入, 不参与授权):
+
+- Team charter:
+  - `mission` (团队使命)
+  - `owned_areas[]` (负责的业务域/系统/组件, 自由文本)
+  - `interfaces[]` (对外接口/边界, 自由文本)
+  - `oncall` (自由文本: 轮值/响应口径/升级路径)
+- Working agreement:
+  - `definition_of_done` (DoD, 最小完成定义)
+  - `review_policy` (哪些变更必须 review, 由谁 review)
+  - `artifact_policy` (哪些信息必须以 artifact 形式沉淀, 禁止只在聊天里)
+
+落地方式 (增量):
+
+- 初期作为 artifact + config 引用: `teamCharterArtifactId`, `workingAgreementArtifactId`.
+- 后续在 `team_update_config` 中支持更新这些引用, 并以事件日志审计.
+
+### 14.10 变更管理 (Release / Rollout / Rollback) (仅规划)
+
+产品目标:
+
+- 将 "发布/上线/回滚" 从隐式聊天变成可审计的控制面动作, 支持灰度与回滚条件收敛.
+
+最小能力 (仅规划):
+
+- `team_release_plan_create`: 生成 `release_plan` artifact, 绑定 task, 记录风险与回滚触发.
+- `team_release_approve`: owner/leader 显式批准执行 (带事件日志).
+- `team_release_abort`: 显式终止并记录原因 (带事件日志).
+
+固定约束:
+
+- release gate 不得隐式通过; 失败必须显式、可定位、可回放.
+
+### 14.11 运行与事故 (Incident + Postmortem) (仅规划)
+
+产品目标:
+
+- 支持现代公司的运行闭环: 发现 -> 止血 -> 修复 -> 复盘 -> 行动项.
+
+最小能力 (仅规划):
+
+- `org_incident_create` / `org_incident_update` / `org_incident_close` (仅 principals)
+- incident 关联 artifacts: `runbook`, `patch`, `postmortem`
+- incident 关联 tasks: 可为多个 teams 创建任务并追踪完成
+
+固定约束:
+
+- incident 的跨 team 协调仍遵循 principals channel; 不新增 member 级跨 team 通道.
+
+### 14.12 Backlog、里程碑与跨 Team 项目 (仅规划)
+
+产品目标:
+
+- 贴近真实研发组织的 "计划-执行-复盘" 节奏, 需要可持久化的 backlog 与跨 team 项目视图, 而不是只靠即时聊天记忆.
+
+最小能力 (仅规划):
+
+- Team backlog:
+  - tasks 增加 `priority` / `labels[]` / `milestone` 等字段 (元数据, 不参与授权)
+  - `team_task_list` 支持按 priority/milestone 过滤与排序 (避免大团队任务淹没)
+- Org initiative (跨 team 项目):
+  - `org_initiative_create` / `org_initiative_update` / `org_initiative_close` (仅 principals)
+  - initiative 绑定多个 team tasks/artifacts, 并提供只读汇总视图供 President 监督
+
+固定约束:
+
+- initiative 是 "索引与汇总层", 不能绕过 team 的授权与边界; 细节仍在 team scope 内完成.
+
+## 15. 非功能需求 (NFR) 与治理
+
+### 15.1 可恢复与可审计
+
+- durable-first: 先持久化, 再尽力投递.
+- append-only events: 必须能从 `events.jsonl` 重建关键状态 (team/org 关键对象).
+- 幂等: 所有写操作必须支持幂等或显式拒绝重复, 不得产生半成功状态.
+
+### 15.2 成本与配额 (仅规划)
+
+Agent Org 会把 "招募" 变成一等能力, 需要配额与预算以防失控:
+
+- org/team 级:
+  - `maxAgents`, `maxTeams`, `maxRecruitPerHour`
+  - `maxParallelTools` (与 `2026-03-06` 的 Budget 对齐)
+- 运行时:
+  - 超额时必须显式失败, 或进入显式可见的 degrade 模式 (不得静默)
+
+### 15.3 隐私与数据最小化
+
+Profile 可能包含敏感信息, 产品必须坚持最小化原则:
+
+- profile/template 的默认建议是 "职业画像", 避免收集无必要的个人信息.
+- 必须允许成员随时更新自己的 profile 内容.
+- 控制面日志不得复制 profile 全量内容; 只记录变更元信息 (例如 threadId, templateId, 变更时间戳).
+
+### 15.4 质量门禁与可复现 (仅规划)
+
+- Agent Org 不替代 CI, 但必须提供可挂接的门禁点:
+  - task-level 完成前的 validator (例如要求存在 `patch` artifact, 或存在 review 结果)
+  - `leader_approves` completionMode 的显式批准工具
+- Definition of Done 必须可被组织固化 (team working agreement), 且在 kickoff 时对 assignees 可见.
+- 所有门禁失败必须显式失败并可定位, 禁止静默放行或假成功.
+
+### 15.5 安全与授权 (Pinned)
+
+- profile/模板/文化等元数据不参与授权, 且不得产生 "自封角色" 的可达路径.
+- 边界强制必须是代码层 target-based authorization, 不能依赖 prompt 约定.
+- 控制面写接口必须校验 caller 身份与角色, 并记录审计事件 (谁在什么时候改了什么).
+
+### 15.6 可观测性与可调试性
+
+- 必须能从 `$CODEX_HOME` 的持久化状态回答 "谁在什么 team/org 里, 拥有什么角色, 做了哪些控制面动作".
+- 必须提供最小自描述工具面 (例如 `team_current` / `team_info` / `org_info`), 避免 out-of-band 粘贴.
+- 对隐私字段做最小化记录: 事件日志记录引用与摘要, 不复制大字段.
+
+## 16. 风险、边界场景与开放问题
+
+必须显式记录并在实现前给出决策:
+
+1. 多 org: 一个 thread 是否允许同时属于多个 org
+1. 成员迁移: thread 是否允许在 teams 之间移动, 迁移时 inbox/tasks 如何处理
+1. 归档与清理: team/org 的删除语义, events/inbox 的保留策略
+1. 命名冲突: 批量招募时 displayName/name 重复如何处理 (自动编号或显式拒绝)
+1. 招募失败回滚: 部分成员 spawn 成功, 部分失败时的事务语义 (必须可预测且可审计)
+1. 角色变更: leader 任命/撤销的生效时序, 与正在进行的任务/消息如何一致
+1. 深度上限: 子代理深度上限触发时, 哪些工具仍需保留以保证可观测与自描述
+1. 噪声与滥用: team mesh/broadcast 产生刷屏时如何治理 (默认策略、限频、冷却窗口)
+1. 事件日志增长: events/inbox 的 compaction/归档策略, 以及 cursor 的稳定性
+1. 产物保密: artifacts 的访问控制与跨 team 引用边界 (尤其是包含敏感信息时)
+1. 多 assignee 卡死: assignee 被移除/线程关闭/长时间无心跳时, 任务如何自动恢复与重新分派
+1. 招募失控: 配额/预算不足时的显式失败语义, 以及对正在运行任务的影响
+1. 真实世界一致性: "离线测试全绿" 与 "真实运行流程" 的差距如何通过 gate 明确表达与收敛
+
+本提案后续每次实现一个新控制面工具, 都必须对上述问题给出本期的明确决策与可验证行为.
