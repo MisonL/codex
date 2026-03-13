@@ -1,459 +1,844 @@
-# Agent Teams v2: Org Hierarchy + Mesh Collaboration (Design Proposal)
+# Agent Teams v2: 组织层级 + 团队内 Mesh 协作 (设计提案)
 
-Date: 2026-03-13
+日期: 2026-03-13
 
-This document proposes a next iteration of Codex "Agent Teams" that:
+本文提出 Codex "Agent Teams" 的下一迭代方案, 目标包括:
 
-- Enables peer-to-peer collaboration *within* a team (not just lead <-> member).
-- Supports assigning a *single* task to *multiple* agents without pre-splitting work.
-- Adds a clear communication boundary between teams: cross-team messaging is restricted to team leaders.
-- Establishes an explicit hierarchy: a user-facing "President" (mainline agent thread) manages multiple teams via their leaders.
+- 在单个 team 内启用点对点协作 (不再只是 lead <-> member).
+- 支持将单个任务直接分派给多个 agent, 无需 leader 预先拆分工作边界.
+- 引入清晰的跨 team 通信边界: 跨 team 消息仅允许 team leader 发送.
+- 建立显式层级: 面向用户的 "President" (主线 agent thread) 通过各 team leader 管理多个 team.
+- 通过强化通用 agent-to-agent 工具 (例如 `send_input`) 的授权, 使边界可被代码强制执行, 阻止 teammate 绕过 org/team 策略.
 
-The proposal is intentionally incremental and reuses the existing durable inbox + persisted tasks primitives described in `docs/agent-teams.md`.
+该提案刻意保持增量式, 复用 `docs/agent-teams.md` 中已经存在的 durable inbox + persisted tasks 原语.
 
-## 0. Positioning (Built on Existing Swarm Architecture)
+## 0.1 固定决策 (Pinned)
 
-This proposal is a focused "Agent Teams" enhancement that sits inside the broader multi-agent control-plane direction described in:
+本文为该方案的固定版本. 以下约束不是可选项:
+
+1. **持久化优先是唯一真相**
+   - team/org 的成员关系、角色与策略必须从 `$CODEX_HOME` 下持久化的控制面状态读取.
+   - 允许存在内存 registry (in-memory registry) 作为缓存, 但不得作为授权真相.
+
+1. **团队内消息是 mesh (范围限制在 `teamId`)**
+   - 同一 `teamId` 内, 任意成员可以向任意其他成员 (以及 leaders) 发送消息.
+   - President 也可以作为团队 owner/监管者 (owner/supervisor) 向任何 team 的任何人发送消息.
+
+1. **单任务多 assignee 是一等能力**
+   - leader 可以将 1 个任务分派给多个 assignee (无需预拆分).
+   - 每个 assignee 的状态需要持久化, 并驱动任务完成语义.
+
+1. **跨 team 通信仅 leader 可用 (范围限制在 `orgId`)**
+   - 只有 team leaders (以及 President) 可以发送跨 team 消息, 且只能通过 `org_*` 工具.
+   - team members 不允许直接向其他 team 发送消息.
+
+1. **边界约束必须在代码层执行 (不是 prompt 约定)**
+   - 能绕过策略的通用 agent-to-agent 工具 (至少: `send_input`, `close_agent`, `resume_agent`) 必须对 teammate thread 做限制.
+   - teammate 必须使用 `team_*` / `org_*` 工具进行沟通与协作.
+
+1. **默认隔离, 通过 artifact 显式共享**
+   - 大体量或需要持久保留的产物必须通过显式 artifact 共享 (不要靠在消息里复制大段内容).
+
+## 0.2 术语与命名
+
+当前 v1 实现里 "lead" 指代 "spawn team 的那个 thread". v2 引入了委派领导, 因此必须消歧:
+
+- **总裁线程 (President thread)**: 面向用户的主线 agent thread (root thread), 负责监管 org.
+- **团队所有者 (Team owner)**: 负责团队生命周期 (spawn/close/cleanup) 的 thread. 为兼容性, 在 team config 中持久化为 `leadThreadId`, 默认应被视作 President.
+- **团队负责人 (Team leader)**: 团队内的委派 leader, 持久化在 `leaders[]`. leaders 拥有团队控制面权限 (任务、跨 team 沟通、受策略约束的 broadcast 等).
+- **团队成员 (Team member)**: 团队内的普通成员 (非 leader).
+
+固定规则:
+
+- `leadThreadId` 表示 **owner/president**, 而不是委派的 team leader.
+
+## 0.3 命名约定
+
+为避免歧义, 本文对不同层采用不同命名约定:
+
+1. **工具 API (Tool APIs)** (`team_*`, `org_*`):
+   - 工具参数与工具输出使用 `snake_case` (与现有 v1 工具保持一致).
+
+1. **持久化的控制面状态** (位于 `$CODEX_HOME` 下的文件):
+   - JSON/JSONL 字段使用 `camelCase` (与现有 `TeamInboxEntry` 的持久化格式保持一致).
+
+1. **Swarm 信封 (envelope) 元数据**:
+   - 字段使用 `camelCase` (`swarmRunId`, `teamId`, `taskId`, `sequence`, `causalParent`).
+
+## 0.4 立场定位 (基于现有 Swarm 架构)
+
+本提案是对 "Agent Teams" 的聚焦增强, 处于更大的多 agent 控制面方向之内, 该方向见:
 
 - `docs/plans/2026-03-06-codex-swarm-architecture.md`
 
-In particular, it follows the same core principle:
+其核心原则保持一致:
 
-- Add a small control plane layer, minimize changes to the data plane, and avoid rewriting the execution plane.
+- 补一个轻量控制面层, 尽量少改数据面, 不重写执行面.
 
-How this document maps to the earlier design:
+重要对齐点:
 
-- Control-plane objects:
-  - `Org` (President + team leaders) is a lightweight slice of the proposed `SwarmRun` (kind: `swarm`).
-  - `Team` remains the existing `team_id`-scoped workflow (kind: `team`), but we add missing semantics (mesh messaging, leader delegation, multi-assignee tasks).
-- Task model:
-  - Multi-assignee tasks extend the earlier `TaskSpec` idea by tracking per-assignee state, without forcing the leader to pre-split work.
-- Observability and replay:
-  - Team/org messages and task transitions should carry a stable envelope (`swarmRunId`, `teamId`, `taskId`, `sequence`, `causalParent`) so the system remains auditable and replayable.
-- Memory model:
-  - Keep thread work memory isolated by default; share via explicit, published artifacts when content is large or should be durable.
+- `2026-03-06` 明确避免 **全局** 点对点 mesh. 本提案通过将 "mesh" 严格限制在单个 `team_id` 范围 (durable inbox + 尽力实时投递), 并通过 `org_*` 工具强制 **leader-only** 跨 team 通信, 来保持这一约束.
 
-## 1. Goals
+本文与更早设计的映射关系:
 
-1. Team members can directly coordinate with each other using team-scoped tools.
-1. A team leader can assign one task to multiple members and let the members self-organize.
-1. Cross-team communication is constrained to team leaders (and optionally the President), with a single controlled ingress/egress.
-1. The user-facing mainline agent acts as a "President" who supervises team leaders and overall progress.
-1. All messaging remains durable-first (persist, then best-effort live delivery).
+- 控制面对象:
+  - `Org` (President + team leaders) 是提议 `SwarmRun` (kind: `swarm`) 的一个轻量切片.
+  - `Team` 仍复用现有 `team_id` 范围的工作流 (kind: `team`), 但补齐缺失语义 (团队内 mesh 消息、leader 委派、多 assignee 任务).
+- 任务模型:
+  - 多 assignee 任务扩展了早期 `TaskSpec` 的方向, 通过 assignee 级状态跟踪实现, 而不要求 leader 预拆分.
+- 可观测性与回放:
+  - team/org 消息与任务状态迁移应携带稳定 envelope (`swarmRunId`, `teamId`, `taskId`, `sequence`, `causalParent`), 以保证可审计与可回放.
+- 记忆模型:
+  - 线程工作记忆默认隔离; 当内容较大或需要持久化时, 通过显式 artifact 发布共享.
 
-## 2. Non-goals
+## 0.5 控制合同 (CSE) (Pinned)
 
-1. Full "nested teams" where a teammate can freely spawn more teams/agents without any governance. (This can be added later with quotas.)
-1. A distributed, multi-process control plane. This proposal stays in-process and file-persisted like v1.
-1. A brand new chat UI. The core deliverable is semantics and tools; UI improvements are follow-ons.
+本节用于让设计可验证, 降低 "看起来没问题" 的漂移.
 
-## 3. Current State (v1) and Gaps
+- **主要设定值:** 团队内点对点协作 + 多 assignee 任务, 同时跨 team 通信保持 leader-only 且不可绕行.
+- **验收标准 (必须可在代码中测试):**
+  - 任意 teammate 可以在同一 `team_id` 内对任意其他 teammate 执行 `team_message`, 并且会追加一条持久化 inbox 记录.
+  - 非 leader 的跨 team 消息必须被拒绝 (仅 leaders/President 可通过 `org_*`).
+  - 当目标 thread 已注册到 org/team 时, `send_input` / `close_agent` / `resume_agent` 不得绕过 org/team 策略边界.
+  - 多 assignee 任务必须遵守 `claimMode` + `completionMode`, 且 `leader_approves` 必须有显式批准执行器.
+- **约束:** durable-first; `$CODEX_HOME` 下的持久化状态是授权真相; 禁止静默回退路径.
+- **传感器/证据:** `$CODEX_HOME/teams/*/config.json`, `inbox/*.jsonl`, `tasks/*.json`, `events.jsonl` (以及对应 lock 文件).
 
-In `docs/agent-teams.md`, the current Agent Teams workflow provides:
+## 1. 目标
+
+1. 团队成员可以通过 team-scoped 工具直接互相协作.
+1. team leader 可以把 1 个任务分派给多个成员, 由成员自组织拆分.
+1. 跨 team 通信被约束为 leaders (以及可选的 President) 才能执行, 且只有一个受控入口/出口.
+1. 面向用户的主线 agent 作为 "President", 负责监督各 team leaders 与整体进展.
+1. 所有消息仍保持 durable-first (先持久化, 再尽力实时投递).
+
+## 2. 非目标
+
+1. 完整的 "嵌套团队": 允许队员自由 spawn 更多 teams/agents 且不受治理 (后续可以加配额/治理再做).
+1. 分布式、多进程控制面. 本提案仍保持类似 v1 的 in-process + 文件持久化.
+1. 新的聊天 UI. 本提案核心交付是语义与工具; UI 改进属于后续跟进.
+
+## 3. 当前状态 (v1) 与缺口
+
+在 `docs/agent-teams.md` 中, 当前 Agent Teams 工作流已提供:
 
 - `spawn_team` / `wait_team` / `close_team` / `team_cleanup`
-- Durable per-thread inbox under `$CODEX_HOME/teams/<team_id>/inbox/<thread_id>.jsonl`
-- A persisted initial task per spawned member under `$CODEX_HOME/tasks/<team_id>/*.json`
-- Task operations: `team_task_list`, `team_task_claim(_next)`, `team_task_complete`
-- Lead-driven messaging: `team_message`, `team_broadcast` (lead -> member), and `team_ask_lead` (member -> lead)
+- `$CODEX_HOME/teams/<team_id>/inbox/<thread_id>.jsonl` 形式的 per-thread durable inbox
+- `$CODEX_HOME/tasks/<team_id>/*.json` 形式的初始任务持久化
+- 任务工具: `team_task_list`, `team_task_claim(_next)`, `team_task_complete`
+- lead 驱动的消息: `team_message`, `team_broadcast` (lead -> member) 与 `team_ask_lead` (member -> lead)
 
-Observed gaps for "real teams":
+面向 "真实团队" 的缺口:
 
-1. Intra-team messaging is effectively star-shaped around the lead thread.
-1. Tasks are 1:1 assigned, which forces the lead to pre-split responsibilities.
-1. There is no first-class cross-team boundary. A teammate could use generic tooling (`send_input`) to message anyone if it knows ids.
-1. Leadership is implicit (the spawning thread) and does not map to the common "team leader agent" mental model.
+1. 团队内消息实际呈现为围绕 lead 的星型结构.
+1. 任务是 1:1 分派, 迫使 lead 预先拆分职责边界.
+1. 缺少一等的跨 team 边界. 如果知道 thread id, teammate 可能用通用工具 (`send_input`, `close_agent`, `resume_agent`) 绕过预期的 leader-only 跨 team 边界.
+1. leadership 是隐式的 (spawn team 的 thread), 不符合常见 "团队有一个 leader agent" 的心智模型.
 
-## 4. Proposed Model
+## 4. 提议模型
 
-### 4.1 Entities
+### 4.1 实体
 
-1. **Organization (Org)**
-1. **Team**
-1. **Agent thread** (existing `ThreadId` / "agent_id")
+1. **组织 (Org)**
+1. **团队 (Team)**
+1. **Agent 线程 (Agent thread)** (现有 `ThreadId` / "agent_id")
 
-### 4.2 Roles
+### 4.2 角色
 
-1. **President**
-- The user-facing mainline agent thread.
-- Owns the Org and oversees all teams.
-- Responsible for creating teams and appointing team leaders.
+1. **总裁 (President)**
+   - 面向用户的主线 agent thread.
+   - 拥有 org, 监督所有 teams.
+   - 负责创建 teams 并任命 team leaders.
 
-1. **Team Leader**
-- An agent thread that is a member of exactly one operational team.
-- Has privileges to manage that team (messaging policy, task assignment, status reporting).
+1. **团队负责人 (Team Leader)**
+   - 团队内的 agent thread, 且只属于一个 operational team.
+   - 拥有管理该 team 的权限 (消息策略、任务分派、向 President 汇报状态).
 
-1. **Team Member**
-- A normal agent thread in a team.
-- Can coordinate directly with peers in the same team.
+1. **团队成员 (Team Member)**
+   - 团队内普通 agent thread.
+   - 可以在团队内与 peers 直接协作.
 
-### 4.3 Envelope (Swarm-style Metadata)
+### 4.3 信封 (Swarm 风格元数据)
 
-To align with the `swarm envelope` direction from `2026-03-06-codex-swarm-architecture.md`, the following metadata should be present (at least in persisted state, and ideally also in emitted events):
+为对齐 `2026-03-06-codex-swarm-architecture.md` 的 `swarm envelope` 方向, 下列元数据应至少出现在持久化状态中, 并尽可能出现在 emitted events 中:
 
-- `swarmRunId`: the Org id (President-managed "swarm run" scope)
-- `teamId`: the team id
+- `swarmRunId`: Org id (President 管理的 "swarm run" 范围; 在 team/org 状态中持久化为 `orgId`)
+- `teamId`: team id
 - `agentId`: sender/receiver thread id
-- `taskId`: optional; set when the message or state transition is tied to a task
-- `sequence`: monotonic sequence per `(swarmRunId, teamId)` for deterministic replay
-- `causalParent`: optional causal link (for example: "this message was sent in response to task X claim")
+- `taskId`: 可选; 当消息或状态迁移与某个 task 绑定时设置
+- `sequence`: 按 scope 单调递增, 用于确定性回放
+  - Team scope: 对 `(orgId, teamId)` 单调递增
+  - Org scope: 对 `orgId` 单调递增
+- `causalParent`: 可选; 因果链指针 (例如 "该消息响应了 task X 的 claim")
 
-This proposal does not require changing the existing `item` model; it only requires enriching persisted records and collab events with stable identifiers.
+本提案不要求修改现有 `item` 模型; 它要求:
 
-## 5. Mesh Collaboration Inside a Team
+1. 在持久化记录中补齐稳定标识, 让控制面可以在不解析模型输出的前提下被审计与回放.
+1. 引入 append-only 控制面事件日志, 以便确定性生成 `sequence`.
 
-### 5.1 Design Principle
+固定的持久化增量:
 
-If two agents are members of the same `team_id`, they should be able to communicate through a team-scoped tool that:
+- team 事件日志: `$CODEX_HOME/teams/<team_id>/events.jsonl`
+- org 事件日志: `$CODEX_HOME/orgs/<org_id>/events.jsonl`
 
-1. Validates membership.
-1. Persists the message to the receiver inbox (durable-first).
-1. Attempts real-time delivery (best-effort).
+task JSON 仍然是 "最新快照". 事件日志是回放/审计真相.
 
-### 5.2 Tool Changes
+### 4.4 持久化 Schema (Pinned)
 
-#### 5.2.1 `team_info` (new)
+固定设计依赖持久化的控制面状态. v2 的最小 schema 如下:
 
-Return team metadata needed for self-organization:
+兼容性规则:
 
-- `team_id`, `org_id`
-- `leaders` (thread ids and names)
-- `members` (thread ids, names, agent roles if available)
-- Optional: messaging policy (see below)
+- v2 reader 必须继续可解析 v1 持久化文件 (缺少 v2 新字段), 通过将新字段视作可选并应用安全默认值实现.
 
-This prevents "out-of-band" sharing of agent ids and enables agents to discover peers in-team.
+#### 4.4.1 Team config (`$CODEX_HOME/teams/<team_id>/config.json`)
 
-#### 5.2.2 `team_message` (behavior change)
+```json
+{
+  "schemaVersion": 2,
+  "teamName": "demo-team",
+  "orgId": "org-123",
+  "leadThreadId": "thread-president",
+  "leaders": ["thread-leader-a"],
+  "broadcastPolicy": "leaders_only",
+  "createdAt": 1739988000,
+  "members": [{ "name": "alice", "agentId": "thread-alice", "agentType": "develop" }]
+}
+```
 
-Current v1 semantics are effectively "lead -> member". v2 semantics:
+#### 4.4.2 Org config (`$CODEX_HOME/orgs/<org_id>/config.json`)
 
-1. Any team member or leader may call `team_message`.
-1. Sender and receiver must both be members of the same `team_id`.
-1. The persisted inbox entry should include:
-- `from_thread_id`
-- `from_name` (resolved from team config; `"president"` when applicable)
-- `from_role` (member/leader/president)
+```json
+{
+  "schemaVersion": 2,
+  "orgId": "org-123",
+  "presidentThreadId": "thread-president",
+  "createdAt": 1739988000,
+  "teams": [{ "teamId": "demo-team", "leaders": ["thread-leader-a"] }]
+}
+```
+
+#### 4.4.3 Team inbox entry (`$CODEX_HOME/teams/<team_id>/inbox/<thread_id>.jsonl`)
+
+```json
+{
+  "id": "msg-1",
+  "createdAt": 1739988001,
+  "orgId": "org-123",
+  "teamId": "demo-team",
+  "fromThreadId": "thread-alice",
+  "fromName": "alice",
+  "fromRole": "member",
+  "toThreadId": "thread-bob",
+  "taskId": "task-1",
+  "sequence": 42,
+  "causalParent": "taskClaim:task-1:thread-alice",
+  "inputItems": [],
+  "prompt": "..."
+}
+```
+
+#### 4.4.4 Team task snapshot (`$CODEX_HOME/tasks/<team_id>/<task_id>.json`)
+
+```json
+{
+  "schemaVersion": 2,
+  "id": "task-1",
+  "title": "Implement feature X",
+  "state": "claimed",
+  "dependsOn": [],
+  "assignees": [{ "name": "alice", "agentId": "thread-alice" }],
+  "assigneeState": { "thread-alice": "claimed" },
+  "claimMode": "exclusive",
+  "completionMode": "any_assignee",
+  "leaseUntil": null,
+  "approvedAt": null,
+  "approvedByAgentId": null,
+  "updatedAt": 1739988002
+}
+```
+
+说明:
+
+- 当 `completionMode == leader_approves` 时, `approvedAt` / `approvedByAgentId` 必须被写入; 其他模式应保持为 `null`.
+- `state` 是派生字段; `assigneeState` 才是完成语义的权威真相.
+
+#### 4.4.5 控制面事件日志 entry (`$CODEX_HOME/teams/<team_id>/events.jsonl`)
+
+```json
+{
+  "id": "ev-1",
+  "createdAt": 1739988001,
+  "orgId": "org-123",
+  "teamId": "demo-team",
+  "sequence": 42,
+  "kind": "team.message.appended",
+  "actorThreadId": "thread-alice",
+  "taskId": null,
+  "causalParent": null,
+  "payload": {}
+}
+```
+
+#### 4.4.6 Org inbox entry (`$CODEX_HOME/orgs/<org_id>/inbox/<thread_id>.jsonl`)
+
+```json
+{
+  "id": "msg-1",
+  "createdAt": 1739988001,
+  "orgId": "org-123",
+  "fromThreadId": "thread-leader-a",
+  "fromTeamId": "team-a",
+  "fromName": "lead-a",
+  "fromRole": "leader",
+  "toThreadId": "thread-leader-b",
+  "toTeamId": "team-b",
+  "sequence": 7,
+  "causalParent": null,
+  "inputItems": [],
+  "prompt": "..."
+}
+```
+
+#### 4.4.7 Org 控制面事件日志 entry (`$CODEX_HOME/orgs/<org_id>/events.jsonl`)
+
+```json
+{
+  "id": "ev-1",
+  "createdAt": 1739988001,
+  "orgId": "org-123",
+  "sequence": 7,
+  "kind": "org.leader.message.appended",
+  "actorThreadId": "thread-leader-a",
+  "causalParent": null,
+  "payload": { "fromTeamId": "team-a", "toTeamId": "team-b" }
+}
+```
+
+### 4.5 控制面引导工具 (new)
+
+v2 模型引入了新的持久化字段 (`leaders[]`, `broadcastPolicy`, `orgId`) 与新的持久化资源 (`$CODEX_HOME/orgs/...`). 这要求 President 拥有明确的控制面执行器 (tools), 而不是靠手工编辑文件.
+
+#### 4.5.1 `team_update_config` (new, president-only)
+
+以受控方式更新团队持久化配置 (`$CODEX_HOME/teams/<team_id>/config.json`).
+
+- Inputs (snake_case):
+  - `team_id`
+  - `leaders` (可选; 成员名或 thread id, 必须校验属于 `members[]`)
+  - `broadcast_policy` (可选)
+  - `org_id` (可选; 将 team attach/detach 到某个 org)
+- Outputs:
+  - 更新后的 team 元信息 (至少包含: `team_id`, `org_id`, `leaders`, `broadcast_policy`)
+
+必备属性:
+
+- 授权: 仅 President thread (team owner / `leadThreadId`) 可调用.
+- 写入必须原子化, 且需要向 `$CODEX_HOME/teams/<team_id>/events.jsonl` 追加控制面事件.
+
+#### 4.5.2 `team_set_leaders` (可选便利工具)
+
+`team_update_config` 的便利封装, 仅修改 `leaders`.
+
+#### 4.5.3 `org_create` (new, president-only)
+
+在 `$CODEX_HOME/orgs/<org_id>/config.json` 创建 org 配置并初始化:
+
+- `presidentThreadId = caller`
+- 空 `teams[]`
+- org event log 目录与 inbox 目录
+
+#### 4.5.4 `org_register_team` (new, president-only)
+
+将 team 挂接到 org 并维护引用一致性:
+
+- Writes:
+  - 更新 `orgs/<org_id>/config.json`, 写入 team 与其 leaders
+  - 更新 `teams/<team_id>/config.json`, 写入 `orgId = <org_id>`
+- 必须幂等, 且需要分别追加 org/team 的控制面事件.
+
+### 4.6 幂等性、锁与事件覆盖 (Pinned)
+
+为保证 durable-first 语义在并发与重启场景下正确:
+
+- **原子写:** 对 `config.json` 与 task snapshot 的更新必须采用 write-temp-then-rename (禁止产生半截 JSON).
+- **互斥锁:** 所有 JSONL append 面必须使用 per-file lock (v1 已有 inbox lock; events logs 也必须加锁).
+- **sequence 分配:** 在持有 해당 scope (team/org) 的 `events.lock` 时分配 `sequence`, 然后将其写入对应的 inbox/event entry.
+- **幂等:** task-level 完成迁移与 hooks 必须只触发一次; 重复调用必须显式报错或显式 no-op, 但不得静默 "半成功".
+
+最小事件覆盖 (仅当状态实际变化时才向 `events.jsonl` 追加):
+
+- Team scope:
+  - `team.config.updated`
+  - `team.message.appended`
+  - `team.task.created`
+  - `team.task.assignees.updated`
+  - `team.task.assignee.claimed`
+  - `team.task.assignee.completed`
+  - `team.task.approved`
+- Org scope:
+  - `org.created`
+  - `org.team.registered`
+  - `org.leader.message.appended`
+
+## 5. 团队内 Mesh 协作
+
+### 5.1 设计原则
+
+如果两个 agent 同属同一个 `team_id`, 他们应能通过 team-scoped 工具沟通, 且该工具必须:
+
+1. 校验成员关系.
+1. 将消息持久化写入 receiver 的 inbox (durable-first).
+1. 尽力进行实时投递 (best-effort).
+
+### 5.2 工具变更
+
+#### 5.2.1 `team_current` (new)
+
+当前 team-scoped 工具都要求显式传入 `team_id`. 要实现真实的 mesh 协作, teammate 必须能在不依赖 out-of-band 的前提下发现自己的 `team_id`.
+
+`team_current` 返回调用方的当前 team 上下文 (不在 team 内则返回空):
+
 - `team_id`
-- Optional `task_id` when the message is about a task
+- `org_id` (可选)
+- `role`: `"member" | "leader"` (或空)
+- `president_thread_id` (team owner; 为兼容性在配置中持久化为 `leadThreadId`)
 
-This turns the team into a mesh, without exposing cross-team messaging.
+固定要求:
 
-#### 5.2.3 `team_broadcast` (policy + behavior change)
+- v2 必须提供 `team_current` 或等价的自动注入机制, 使 teammate 不需要 President 人工粘贴 team id 也能调用 `team_*` 工具.
 
-Broadcast is useful but can become noisy. v2 proposes a policy flag in team config:
+#### 5.2.2 `team_info` (new)
 
-- `broadcast_policy: "leaders_only" | "all_members"`
+返回团队自组织所需的元信息:
 
-Default: `leaders_only`.
+- `team_id`, `org_id` (未注册到 org 时可为空)
+- `president_thread_id` (team owner; 为兼容性持久化为 `leadThreadId`)
+- `leaders` (thread ids 与 names)
+- `members` (thread ids、names、可选 agent roles)
+- 可选: 消息策略 (见下文)
 
-If `all_members`, any member can broadcast; if `leaders_only`, non-leaders must use `team_message` or ask the leader.
+这能避免 out-of-band 共享 agent ids, 并让团队内成员自发现 peers.
 
-### 5.3 Recommended Collaboration Protocol (prompt-level)
+授权:
 
-Tools enable messaging; prompts/instructions make it effective. When a task is assigned to multiple agents, inject a standard kickoff message:
+- 仅 team 成员/leader 或 President thread (team owner) 可调用.
 
-1. Each assignee posts what they plan to do in 2-4 bullets.
-1. Assignees negotiate boundaries and dependencies via `team_message`.
-1. If there is conflict or ambiguity, escalate to the Team Leader.
+#### 5.2.3 `team_message` (行为变更)
 
-This keeps autonomy inside the team without requiring the leader to micromanage upfront.
+v1 当前语义基本是 "lead -> member". v2 语义:
 
-## 6. Multi-assignee Tasks
+1. 任意 team member 或 leader 均可调用 `team_message`.
+1. sender 与 receiver 必须同属同一个 `team_id`.
+1. 授权与成员查找必须基于持久化 team config (`$CODEX_HOME/teams/<team_id>/config.json`), 不得依赖以 spawning thread 为 key 的 in-memory registry.
+1. 持久化 inbox entry (JSONL 用 `camelCase`) 应包含:
+   - `fromThreadId`
+   - `fromName` (从 team config 解析; 当适用时可为 `"president"`)
+   - `fromRole` (`member` / `leader` / `president`)
+   - `teamId`
+   - `orgId` (可选)
+   - `sequence` / `causalParent` (当可用时)
+   - `taskId` (可选; 当与某个任务绑定时设置)
 
-### 6.1 Problem
+这将 team 变为有边界的 mesh, 且不暴露跨 team 消息能力.
 
-A leader should be able to assign one task to multiple agents, expecting them to coordinate and self-split, instead of pre-splitting into N tasks.
+#### 5.2.4 `team_broadcast` (策略 + 行为变更)
 
-### 6.2 Task Model v2 (schema concept)
+broadcast 很有用, 但也容易变噪声. v2 提议在 team config 中加入策略开关:
 
-Replace single `assignee` with `assignees`:
+- `broadcastPolicy: "leaders_only" | "all_members"`
 
-- `assignees: [{ name, agent_id }]`
-- `assignee_state: { "<agent_id>": "pending" | "claimed" | "completed" }`
-- `claim_mode: "shared" | "exclusive"`
-- `completion_mode: "all_assignees" | "any_assignee" | "leader_approves"`
-- `lease_until`: optional; aligns with the earlier `TaskSpec.lease_until` / `Lease` concepts for long-running ownership
-- `artifacts`: optional; artifact references published by assignees (see below)
+默认: `leaders_only`.
 
-Defaults:
+若为 `all_members`, 任意成员可 broadcast; 若为 `leaders_only`, 非 leader 必须使用 `team_message` 或通过 leader 协调.
 
-- `claim_mode: "shared"` when `assignees.len() > 1`, else `exclusive`
-- `completion_mode: "all_assignees"` when `assignees.len() > 1`, else `any_assignee`
+#### 5.2.5 `team_ask_lead` (行为变更)
 
-### 6.3 Tool Changes
+v1 中 `team_ask_lead` 会向 spawning thread ("lead") 发消息. v2 中 "lead" 应优先解析为委派 leaders:
+
+1. 当 `leaders[]` 非空时, `team_ask_lead` 投递给所有 team leaders.
+1. 否则, 投递给 `leadThreadId` (President / team owner).
+1. 仍保持 durable-first: 先写 inbox, 再尽力实时投递.
+
+### 5.3 推荐协作协议 (prompt 级)
+
+工具只提供通信能力; 协作质量依赖协作协议. 当某个任务被分配给多个 agent 时, 注入标准 kickoff 信息:
+
+1. 每个 assignee 用 2-4 个要点说明自己的计划与预期产物.
+1. assignees 通过 `team_message` 协商边界与依赖关系.
+1. 若出现冲突或歧义, 升级给 team leader 裁决.
+
+这能让团队内保持自治, 而不要求 leader 在分派时做微观拆分.
+
+## 6. 多 assignee 任务
+
+### 6.1 问题
+
+leader 应能把 1 个任务直接分派给多个 agent, 期望他们自己协调与拆分, 而不是让 leader 先拆成 N 个小任务.
+
+### 6.2 任务模型 v2 (schema 概念)
+
+将单一 `assignee` 替换为 `assignees`:
+
+- `assignees: [{ name, agentId }]`
+- `assigneeState: { "<agentId>": "pending" | "claimed" | "completed" }`
+- `claimMode: "shared" | "exclusive"`
+- `completionMode: "all_assignees" | "any_assignee" | "leader_approves"`
+- `leaseUntil`: 可选; 对齐更早的 `TaskSpec.lease_until` / `Lease` 概念, 用于长任务所有权
+- `artifacts`: 可选; assignees 发布的 artifact 引用 (见下文)
+
+默认值:
+
+- 当 `assignees.len() > 1` 时默认 `claimMode: "shared"`, 否则 `exclusive`
+- 当 `assignees.len() > 1` 时默认 `completionMode: "all_assignees"`, 否则 `any_assignee`
+
+固定状态规则:
+
+- 为列表/UI 方便可持久化派生字段 `state`, 但必须把 `assigneeState` 视为完成语义的权威真相.
+
+固定不变量:
+
+- `assignees[].agentId` 在同一 task 内必须唯一.
+- 当 `assignees.len() > 1` 且 `completionMode == all_assignees` 时必须要求 `claimMode == shared` (否则 task 可能变成不可完成).
+- `assignees` 是权威的 "当前分派集合"; `assigneeState` 可以包含历史 assignee 用于审计, 但当 assignee 被移除后不得阻塞 `all_assignees` 的完成判定.
+
+### 6.2.1 完成语义 (Pinned)
+
+`completionMode` 决定 task 在 task-level 上何时被视为 "completed":
+
+1. `all_assignees`
+   - 当所有当前 assignees 的 `assigneeState[agentId] == "completed"` 时满足 task-level 完成.
+   - 通过 `team_task_assign` 或成员移除来删除 assignee 时, 不得让任务变得不可完成: 被移除的 assignees 必须从 "当前 assignees 集合" 中排除.
+
+1. `any_assignee`
+   - 当任意 assignee 变为 `"completed"` 时满足 task-level 完成.
+   - 其他 assignees 仍可后续完成以便审计/credit, 但 task-level 的完成迁移 (hooks/events) 必须幂等且只触发一次.
+   - task-level 完成后, 新的 claim 必须被拒绝 (避免重复劳动).
+
+1. `leader_approves`
+   - assignees 标记自己的 `assigneeState` 为 `"completed"`.
+   - 仅当 leader (或 President) 显式批准后, task-level 才满足完成.
+
+固定要求:
+
+- 当 `completionMode == leader_approves` 时, v2 必须提供显式批准执行器 (例如 `team_task_approve`), 禁止把 "批准" 混用到 "complete" 上.
+
+### 6.3 工具变更
 
 #### 6.3.1 `team_task_create` (new)
 
-Create a task after `spawn_team`:
+在 `spawn_team` 之后创建任务:
 
 - `team_id`
 - `title`
-- `description` (optional)
-- `assignees` (one or more member names or thread ids)
-- `dependencies` (optional)
-- `claim_mode` / `completion_mode` (optional)
-- `kickoff: true|false` (optional, default true): when true, automatically send a kickoff message to all assignees with the collaboration protocol.
+- `description` (可选)
+- `assignees` (一个或多个成员名或 thread id)
+- `dependencies` (可选)
+- `claim_mode` / `completion_mode` (可选)
+- `kickoff: true|false` (可选, 默认 true): 为 true 时, 自动向所有 assignees 发送 kickoff 信息 (协作协议).
 
-#### 6.3.2 `team_task_claim` / `team_task_claim_next` (behavior change)
+授权:
 
-For `shared` tasks:
+- 仅 team leaders 或 President thread (team owner) 可调用.
 
-- Claiming marks the caller's `assignee_state` as `claimed` but does not block other assignees.
+#### 6.3.2 `team_task_claim` / `team_task_claim_next` (行为变更)
 
-For `exclusive` tasks:
+对 `shared` 任务:
 
-- Preserve current behavior (exactly one claim).
+- claim 会将调用方的 `assigneeState` 标记为 `claimed`, 但不会阻塞其他 assignees.
+- claim 要求调用方必须在 `assignees` 中 (第一阶段不支持 "代领").
+- `team_task_claim_next` 应选择下一条可 claim 的 pending task, 满足:
+  - 调用方在 `assignees` 中, 且
+  - `assigneeState[caller] == "pending"`, 且
+  - dependencies 已满足.
 
-#### 6.3.3 `team_task_complete` (behavior change)
+对 `exclusive` 任务:
 
-For `shared` tasks:
+- 保持现有行为 (只能有一个 claim).
 
-- Completing marks the caller's `assignee_state` as `completed`.
-- Task is considered completed when `completion_mode` is satisfied.
+#### 6.3.3 `team_task_complete` (行为变更)
 
-For `exclusive` tasks:
+对 `shared` 任务:
 
-- Preserve current behavior.
+- complete 会将调用方的 `assigneeState` 标记为 `completed`.
+- complete 要求调用方必须在 `assignees` 中 (完成归因于 assignee).
+- task 何时被视为 completed 由 `completionMode` 决定.
+
+对 `exclusive` 任务:
+
+- 保持现有行为.
 
 #### 6.3.4 `team_task_assign` (new)
 
-Allow leaders to add/remove assignees after creation.
+允许 leaders 在创建后增删 assignees.
 
-### 6.4 Why This Solves "Leader Doesn't Need to Pre-split"
+授权:
 
-1. The leader assigns a single shared task to multiple agents.
-1. Agents coordinate in-team (mesh messaging) and decide boundaries themselves.
-1. The task model tracks per-assignee progress without requiring N separate tasks.
+- 仅 team leaders 或 President thread (team owner) 可调用.
 
-## 7. Cross-team Communication: Leaders Only
+#### 6.3.5 `team_task_approve` (new, `leader_approves` 必需)
 
-### 7.1 Design Principle
+当 `completionMode == leader_approves` 时, 用于批准任务:
 
-Team members should not directly message other teams. Cross-team communication should:
+- 仅 team leaders 或 President 可调用.
+- 当需要批准时, 通过批准将 task 迁移到 completed.
 
-1. Be possible when needed.
-1. Have a single controlled ingress/egress.
-1. Be restricted to team leaders (and optionally the President).
+### 6.4 为什么这能解决 "leader 不必预拆分"
 
-### 7.2 Organization Layer (new persisted concept)
+1. leader 将单个 shared task 分派给多个 agent.
+1. agents 在 team 内通过 mesh 消息协商边界并自组织拆分.
+1. 任务模型通过 per-assignee 状态跟踪进展, 无需拆成 N 个任务.
 
-Introduce an Org registry persisted under `$CODEX_HOME/orgs/<org_id>/...`:
+## 7. 跨 team 通信: 仅 leaders
 
-- `config.json`: President thread id, list of teams, per-team leader thread ids
-- Org-scoped durable inbox per leader (same durable-first semantics)
+### 7.1 设计原则
 
-This Org layer is the boundary enforcement mechanism.
+team members 不应直接向其他 teams 发消息. 跨 team 通信需要:
 
-### 7.3 Org Tools (new)
+1. 在需要时可用.
+1. 只有一个受控入口/出口.
+1. 限制为 team leaders (以及可选的 President).
 
-1. `org_info`: list teams and leaders in the org.
-1. `org_leader_message`: leader -> leader message, validated by org config.
-1. `org_inbox_pop` / `org_inbox_ack`: receive and ack org-scoped messages.
+### 7.2 组织层 (new persisted concept)
 
-Authorization:
+引入 org registry, 持久化在 `$CODEX_HOME/orgs/<org_id>/...`:
 
-- `org_leader_message` may only be called by:
-  - the President thread, or
-  - a thread listed as a leader for some team in the org.
-- The receiver must be:
-  - a leader of another team in the org, or
-  - the President thread.
+- `config.json`: President thread id, teams 列表, 每个 team 的 leader thread ids
+- org 范围的 durable inbox (对每个 leader), 语义与 team inbox 相同 (durable-first)
 
-### 7.4 Enforcing the Boundary (optional hardening)
+org 层即为边界强制执行的机制基础.
 
-To prevent bypassing the boundary via generic tools:
+### 7.3 Org 工具 (new)
 
-1. Restrict `send_input` for teammate threads.
-1. Provide a team-scoped alternative (`team_message`) that supports peer messaging only within team.
+1. `org_info`: 列出 org 内 teams 与 leaders.
+1. `org_leader_message`: leader -> leader 消息, 依据 org config 校验.
+1. `org_inbox_pop` / `org_inbox_ack`: 读取与 ack org 范围消息.
 
-This is a policy decision; it can be introduced as a configuration toggle if needed.
+授权:
 
-## 8. Leadership Delegation Inside a Team
+- `org_leader_message` 仅允许:
+  - President thread, 或
+  - org 内任一 team 的 leader thread
+- receiver 必须是:
+  - org 内另一个 team 的 leader, 或
+  - President thread
 
-To match the mental model of "a team has a leader agent":
+### 7.4 边界强制执行 (required)
 
-1. Add `leaders: [thread_id]` to the persisted team config.
-1. Treat team leaders as privileged actors for:
-- broadcast policy
-- task create/assign
-- status reporting to the President
+要让 "跨 team 仅 leaders" 可被强制执行 (而不是 prompt 约定), 必须阻止通过通用工具绕行:
 
-The spawning thread (President) remains the owner for cleanup and auditing, but does not need to micromanage team operations.
+1. 限制 teammate threads 使用通用 agent-to-agent 工具 (至少: `send_input`, `close_agent`, `resume_agent`).
+1. 确保 teammates 拥有可用的替代表面:
+   - team 内: `team_message` / `team_broadcast` (策略约束) + inbox 工具.
+   - 跨 team: 仅 team leaders 使用 `org_leader_message`, 然后通过 `team_*` 转发给成员.
 
-## 9. Artifacts (Explicit Sharing, Not Shared Context)
+固定策略:
 
-To stay consistent with the earlier "default isolation, share via artifact" guidance:
+- 通用工具不得绕过 org/team 策略边界.
+- 授权检查必须使用 `$CODEX_HOME` 下持久化的 org/team 状态, 不得依赖 per-session 的 in-memory registry.
+- 为避免每次工具调用都全量扫描, 可以构建 threadId -> teamId 的缓存索引, 但缓存必须从持久化状态派生, 且重启后仍安全 (持久化状态仍是唯一真相).
 
-1. Team messages should be short and coordination-oriented.
-1. Non-trivial outputs (plans, summaries, patch sets, reviews, tables) should be published as explicit artifacts and referenced by id.
+强制要求的 hardening 行为:
 
-Follow-on control-plane tools (not required for the first milestone) that would make this practical:
+1. **通用工具必须按 target 做授权 (target-based authorization)**
+   - 对 `send_input` / `close_agent` / `resume_agent`, 授权必须考虑 **target thread**.
+   - 如果 target thread 已注册到任一 team/org, 该工具必须执行与 `team_*` / `org_*` 等价的边界规则, 无论 caller 是否在 in-memory 上下文里被认为 "在 team 内".
 
-- `team_artifact_publish`: create an artifact in the team scope.
-- `team_artifact_read`: read an artifact.
-- `team_artifact_list`: list artifacts for a task/team.
+1. **teammate threads 禁止嵌套 spawn team/agent**
+   - team members (包括委派 leaders) 不得通过 `spawn_agent` / `spawn_team` 作为绕行路径.
+   - 若未来支持嵌套 spawn, 必须显式并保留 org/team scope (禁止非 President threads 创建 "脱离治理" 的 agents).
 
-These map directly to the `Artifact` object described in `2026-03-06-codex-swarm-architecture.md`.
+## 8. 团队内领导委派
 
-## 10. Example End-to-end Flow
+为对齐 "团队有一个 leader agent" 的心智模型:
 
-### 9.1 President creates two teams and appoints leaders
+1. 在 team config 中加入 `leaders: [thread_id]`.
+1. 将 team leaders 视为以下控制面动作的特权 actor:
+   - broadcast 策略
+   - task create/assign
+   - 向 President 汇报状态
 
-1. `spawn_team` creates Team A with members including `lead-a`.
-1. `spawn_team` creates Team B with members including `lead-b`.
-1. President updates each team config to mark `lead-a` and `lead-b` as leaders (mechanism: `team_set_leader` tool or a `leaders` field in `spawn_team` args).
-1. President creates an Org and registers Team A/B and their leaders.
+spawning thread (President) 仍是 owner, 负责 cleanup 与审计, 但不需要微观管理团队日常运作.
 
-### 9.2 Team A leader assigns one task to multiple members
+## 9. Artifacts (显式共享, 非共享上下文)
 
-1. `team_task_create` with `assignees: ["alice", "bob", "charlie"]` and `kickoff: true`.
-1. Each assignee claims the task (`team_task_claim`), posts their plan, and self-splits work.
-1. Each marks completion (`team_task_complete`) as they finish.
+为对齐 "默认隔离, 通过 artifact 共享" 的方向:
 
-### 9.3 Team A leader communicates with Team B leader
+1. team 消息应尽量短, 以协作为主.
+1. 非 trivial 的产物 (计划、总结、patch 集、评审、表格等) 应通过显式 artifact 发布并以 id 引用.
 
-1. `org_leader_message` from `lead-a` to `lead-b`.
-1. `lead-b` forwards relevant details to Team B members via `team_broadcast` or `team_message`.
+后续可跟进的控制面工具 (第一阶段非必需), 用于让 artifact 更易用:
 
-## 11. TUI UX (User Feedback + Control Surfaces)
+- `team_artifact_publish`: 在 team scope 创建 artifact
+- `team_artifact_read`: 读取 artifact
+- `team_artifact_list`: 列出某 task/team 的 artifacts
 
-This section describes how the Codex TUI can make multi-team work feel visible and controllable without flooding the transcript.
+这些与 `2026-03-06-codex-swarm-architecture.md` 中的 `Artifact` 对象方向一致.
 
-Design goals:
+## 10. 端到端示例流程
 
-1. **Layered information:** at-a-glance summaries first, drill-down when needed.
-1. **Low noise by default:** avoid streaming every internal message into the main transcript.
-1. **Fast navigation:** switching focus between President / leaders / members should be 1-2 actions.
-1. **Durable state as source of truth:** dashboards should read from persisted control-plane state (not from model output).
+### 10.1 President 创建两个 teams 并任命 leaders
 
-### 11.1 Information Architecture
+1. `spawn_team` 创建 Team A, 成员包含 `lead-a`.
+1. `spawn_team` 创建 Team B, 成员包含 `lead-b`.
+1. President 更新每个 team config, 将 `lead-a` 与 `lead-b` 标记为 leaders (机制: `team_set_leaders` / `team_update_config`, 写入 `$CODEX_HOME/teams/<team_id>/config.json`).
+1. President 创建 org 并注册 Team A/B 及其 leaders.
 
-The TUI should provide a clear hierarchy:
+### 10.2 Team A leader 将 1 个任务分派给多个成员
+
+1. 调用 `team_task_create`, 参数 `assignees: ["alice", "bob", "charlie"]`, `kickoff: true`.
+1. 每个 assignee claim 任务 (`team_task_claim`), 发布自己的计划并自组织拆分.
+1. 完成后各自标记完成 (`team_task_complete`).
+
+### 10.3 Team A leader 与 Team B leader 沟通
+
+1. `org_leader_message` 从 `lead-a` 发给 `lead-b`.
+1. `lead-b` 通过 `team_broadcast` 或 `team_message` 将关键信息转达给 Team B 成员.
+
+## 11. TUI UX (用户反馈 + 控制界面)
+
+本节描述 Codex TUI 如何让多 team 工作可见、可控, 同时避免刷屏.
+
+设计目标:
+
+1. **分层信息:** 先总览, 需要时再深钻.
+1. **默认低噪声:** 避免把所有内部消息流进主 transcript.
+1. **快速导航:** 在 President / leaders / members 之间切换尽量只需 1-2 个动作.
+1. **持久化状态为真相:** 面板读 `$CODEX_HOME` 的控制面状态 (而不是解析模型输出).
+
+### 11.1 信息架构
+
+TUI 应呈现清晰层级:
 
 - Org (President scope) -> Teams -> Agents -> Tasks -> Artifacts
 
-Where:
+其中:
 
-- The main chat thread is the **President**.
-- Each team has one or more **leaders** (agent threads).
-- Members collaborate in-team via mesh messaging + shared tasks.
+- 主聊天线程是 **总裁 (President)**.
+- 每个 team 有一个或多个 **leaders** (agent threads).
+- 成员通过 team 内 mesh 消息与 shared tasks 协作.
 
-### 11.2 Entry Points (Commands)
+### 11.2 入口点 (Commands)
 
-The TUI already has slash commands and selection views. Add team/org entry points as slash commands:
+TUI 已有 slash commands 与选择视图. 增加 team/org 入口:
 
-- `/org`: open Org dashboard (teams + leaders + rollups)
-- `/org inbox`: show President's org inbox (leader updates, cross-team coordination)
-- `/team`: open current team dashboard (for leader/member threads)
-- `/team tasks`: open task board (current team)
-- `/team inbox`: show current thread's team inbox
-- `/teams`: list teams and jump to a team leader thread ("watch leader")
+- `/org`: 打开 Org 仪表盘 (teams + leaders + 汇总)
+- `/org inbox`: 展示 President 的 org inbox (leader updates, 跨 team 协调)
+- `/team`: 打开当前 team 仪表盘 (leader/member threads 使用)
+- `/team tasks`: 打开任务看板 (当前 team)
+- `/team inbox`: 展示当前线程的 team inbox
+- `/teams`: 列出 teams 并跳转到某个 team leader thread ("watch leader")
 
-These commands should be available only when collaboration features are enabled (same gating model as `/collab` and `/agent`).
+上述命令仅在协作能力启用时可用 (与 `/collab`、`/agent` 的 gating 保持一致).
 
-### 11.3 Dashboards and Overlays
+### 11.3 仪表盘与 Overlays
 
-Use the existing full-screen overlay/pager pattern (like the transcript overlay) to implement:
+复用现有全屏 overlay/pager 交互模式 (类似 transcript overlay):
 
-1. **Org Dashboard (President)**
-- Table rows: `team name/id`, `leader`, `status`, `members`, `tasks (pending/claimed/completed)`, `unread (org inbox)`
-- Actions:
-  - Watch leader thread
-  - Message leader (org-scoped)
-  - Open team summary (read-only)
+1. **Org 仪表盘 (President)**
+   - 表格行: `team name/id`, `leader`, `status`, `members`, `tasks (pending/claimed/completed)`, `unread (org inbox)`
+   - 动作:
+     - Watch leader thread
+     - Message leader (org-scoped)
+     - Open team summary (read-only)
 
-1. **Team Dashboard (Leader/Member)**
-- Sections:
-  - Members list with status dots
-  - Task rollup
-  - Inbox rollup (unread)
-  - Recent artifacts (by task)
-- Actions:
-  - Watch a member thread
-  - Open task board
-  - Open inbox
+1. **Team 仪表盘 (Leader/Member)**
+   - 区域:
+     - Members 列表 (可选状态点)
+     - Task 汇总
+     - Inbox 汇总 (unread)
+     - 最近 artifacts (按 task)
+   - 动作:
+     - Watch member thread
+     - Open task board
+     - Open inbox
 
-1. **Task Board**
-- Group tasks by state: `Pending`, `Claimed`, `Completed`
-- For multi-assignee tasks: show per-assignee sub-state (claimed/completed) and completion mode ("any/all/leader approves")
-- Actions:
-  - Claim (self)
-  - Complete (self)
-  - Open artifacts for task
-  - (Leader only) assign/unassign members
+1. **任务看板 (Task Board)**
+   - 按状态分组: `Pending`, `Claimed`, `Completed`
+   - 多 assignee 任务: 显示每个 assignee 的子状态 (claimed/completed) 与完成模式 ("any/all/leader approves")
+   - 动作:
+     - Claim (self)
+     - Complete (self)
+     - Open artifacts for task
+     - (Leader only) assign/unassign members
 
 1. **Inbox Viewer**
-- Backed by `team_inbox_pop/ack` and `org_inbox_pop/ack` (cursor-based).
-- Show messages with:
-  - `from` (name + role)
-  - `team/org` context
-  - `taskId` (if present)
-  - prompt preview
-- Provide paging, search, and an explicit "Ack all visible" action.
+   - 基于 `team_inbox_pop/ack` 与 `org_inbox_pop/ack` (cursor-based)
+   - 展示字段:
+     - `from` (name + role)
+     - `team/org` 上下文
+     - `taskId` (若存在)
+     - prompt 预览
+   - 支持 paging、search, 并提供显式 "Ack all visible" 动作
 
-### 11.4 Transcript: Summaries, Not Full Internal Chat
+### 11.4 Transcript: 只显示摘要, 不展示全量内部聊天
 
-The main transcript should contain:
+主 transcript 应包含:
 
-- High-level orchestration events (spawn/wait/close) (already present via `Collab*` events).
-- Task lifecycle summaries:
-  - Task created (team + assignees)
-  - Task completed (who completed, whether task is now fully completed)
-- Leader-to-President updates (org inbox), summarized as short "status cards".
+- 高层编排事件 (spawn/wait/close) (已通过 `Collab*` events 存在).
+- 任务生命周期摘要:
+  - 任务创建 (team + assignees)
+  - 任务完成 (谁完成, task 是否已达到 task-level 完成)
+- leader -> President updates (org inbox), 以短 "status cards" 形式摘要展示.
 
-It should *not* automatically display every intra-team peer message by default. Those belong in inbox views.
+默认情况下, 主 transcript 不应自动展示每条 team 内 peer-to-peer 消息. 这些消息应在 inbox 视图中查看.
 
-### 11.5 Status Line Enhancements (Optional)
+### 11.5 状态栏增强 (Optional)
 
-Add new optional status line items to support "at a glance" operation:
+可选增加状态栏项目, 支持 "一眼可控":
 
-- `org`: current org id (or "none")
-- `team`: current team id/name (or "none")
-- `agents`: running/total agents in org (or in team)
-- `unread`: unread inbox count (org/team depending on role)
-- `tasks`: pending/claimed rollup for current team
+- `org`: 当前 org id (或 "none")
+- `team`: 当前 team id/name (或 "none")
+- `agents`: org 内 (或 team 内) running/total agents
+- `unread`: unread inbox count (依据角色区分 org/team)
+- `tasks`: 当前 team 的 pending/claimed 汇总
 
-These should be computed from persisted state and cached with lightweight refresh intervals.
+上述值应从持久化状态计算, 并采用轻量刷新/缓存策略.
 
-### 11.6 Data Sources (No Model Required)
+### 11.6 数据源 (不依赖模型)
 
-To avoid model/tool coupling, the TUI should query state via:
+为避免 model/tool 耦合, TUI 应通过以下方式查询状态:
 
-1. Persisted control-plane files under `$CODEX_HOME` (teams, orgs, tasks, inbox cursors).
-1. Or (preferred long-term) app-server v2 endpoints for `swarm/read`, `swarm/list`, `swarm/task/list`, `swarm/inbox/pop`.
+1. `$CODEX_HOME` 下的持久化控制面文件 (teams, orgs, tasks, inbox cursors).
+1. 或 (长期优先) app-server v2 endpoints: `swarm/read`, `swarm/list`, `swarm/task/list`, `swarm/inbox/pop`.
 
-This aligns with the `2026-03-06` plan: collab tools become stable protocol/control-plane resources, not "tool output parsing".
+这与 `2026-03-06` 的方向一致: collab tools 应演化为稳定协议/控制面资源, 而不是 "解析工具输出".
 
-### 11.7 UX Edge Cases
+### 11.7 UX 边界场景
 
-1. If collaboration features are disabled, the dashboards should show a friendly prompt to enable them.
-1. If an agent thread is missing (shutdown/not found), keep it visible but marked closed (like the existing agent picker).
-1. If inbox JSONL grows large, rely on cursor-based pop and avoid full-file scans on every redraw.
+1. 若协作能力未启用, 仪表盘应给出明确提示.
+1. 若某 agent thread 不存在 (shutdown/not found), 仍保留可见性但标记为 closed (类似现有 agent picker).
+1. 若 inbox JSONL 变大, 依赖 cursor-based pop, 避免每次 redraw 全量扫描.
 
-## 12. Incremental Implementation Plan
+## 12. 增量实现计划
 
-1. Mesh messaging:
-- Add `team_info`.
-- Update `team_message` to allow member-to-member messaging with membership validation.
-- Add `broadcast_policy` to team config and enforce in `team_broadcast`.
+1. 团队内 mesh 消息:
+   - 新增 `team_current`.
+   - 新增 `team_info`.
+   - 更新 `team_message`, 支持 member-to-member, 且成员校验基于持久化 team config.
+   - 在 team config 中加入 `broadcastPolicy`, 并在 `team_broadcast` 中执行策略.
 
-1. Multi-assignee tasks:
-- Add `team_task_create` and `team_task_assign`.
-- Extend persisted task schema to support multiple assignees and per-assignee state.
-- Update claim/complete logic accordingly.
+1. 多 assignee 任务:
+   - 新增 `team_task_create` 与 `team_task_assign`.
+   - 为 `leader_approves` 新增 `team_task_approve`.
+   - 扩展 task 持久化 schema, 支持多 assignees 与 per-assignee state.
+   - 更新 claim/complete 逻辑以匹配新语义.
 
-1. Org boundary:
-- Introduce org persistence and `org_*` tools for leader-to-leader messaging.
-- Optionally restrict `send_input` for teammate threads to harden boundaries.
+1. Org 边界:
+   - 引入 org 持久化与 `org_*` 工具, 支持 leader-to-leader 消息.
+   - 限制通用工具 (`send_input`, `close_agent`, `resume_agent`), 强化边界.
+   - 增加 president-only 控制面管理工具:
+     - `team_update_config` / `team_set_leaders` 用于 leaders 委派与策略旗标.
+     - `org_create` / `org_register_team` (或等价能力) 用于 org bootstrap 与 team 注册.
 
-1. UX follow-ons:
-- TUI overlays for org/team inboxes and task state summaries.
+1. UX 后续:
+   - TUI overlays: org/team inbox 与任务状态摘要.
 
-## 13. Compatibility and Migration
+## 13. 兼容性与迁移
 
-1. Keep v1 tool names where possible; change behavior in a backward-compatible way where feasible.
-1. Version persisted schemas:
-- `schemaVersion` in team config and task json.
-1. Provide a migration path for v1 teams:
-- v1 team config: `leaders = []` implies "no delegated leader" and defaults to President-only broadcast/task creation.
-- v1 tasks map to v2 tasks with `assignees = [assignee]`.
+1. 尽量保留 v1 工具名; 行为变更应尽量保持可兼容迁移.
+1. 持久化 schema 版本化:
+   - 在 team config 与 task JSON 中加入/维护 `schemaVersion`.
+1. 为 v1 teams 提供迁移路径:
+   - v1 team config: `leaders = []` 表示 "无委派 leader", 默认 broadcast/task create 由 President-only 执行.
+   - v1 tasks 映射为 v2 tasks: `assignees = [assignee]`, `claimMode = exclusive`, `completionMode = any_assignee`.
