@@ -80,6 +80,15 @@ fn run_git(path: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed with {status}");
 }
 
+fn enable_agent_org(turn: &mut TurnContext) {
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::AgentOrg)
+        .expect("agent_org feature should enable");
+    turn.config = Arc::new(config);
+}
+
 fn init_git_repo(path: &Path) {
     run_git(path, &["init", "--initial-branch=main"]);
     run_git(path, &["config", "user.name", "Codex Tests"]);
@@ -4614,6 +4623,274 @@ async fn team_message_uses_team_id_when_member_names_overlap() {
         ))
         .await
         .expect("team_cleanup team-b should succeed");
+}
+
+#[tokio::test]
+async fn team_message_uses_persisted_team_config_when_agent_org_enabled() {
+    let (mut owner_session, mut owner_turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    owner_session.services.agent_control = manager.agent_control();
+    enable_agent_org(&mut owner_turn);
+    let codex_home = owner_turn.config.codex_home.clone();
+
+    let owner_session = Arc::new(owner_session);
+    let owner_turn = Arc::new(owner_turn);
+
+    let spawn_output = MultiAgentHandler
+        .handle(invocation(
+            owner_session.clone(),
+            owner_turn.clone(),
+            "spawn_team",
+            function_payload(json!({
+                "members": [
+                    {"name": "planner", "task": "plan"},
+                    {"name": "worker", "task": "work"}
+                ]
+            })),
+        ))
+        .await
+        .expect("spawn_team should succeed");
+    let ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(spawn_content),
+        ..
+    } = spawn_output
+    else {
+        panic!("expected function output");
+    };
+    let spawn_result: SpawnTeamResult =
+        serde_json::from_str(&spawn_content).expect("spawn_team result should be json");
+    let planner_id = agent_id(&spawn_result.members[0].agent_id).expect("valid planner id");
+    let worker_id = agent_id(&spawn_result.members[1].agent_id).expect("valid worker id");
+
+    let (mut member_session, mut member_turn) = make_session_and_context().await;
+    member_session.services.agent_control = manager.agent_control();
+    member_session.conversation_id = planner_id;
+    member_turn.config = owner_turn.config.clone();
+    let member_session = Arc::new(member_session);
+    let member_turn = Arc::new(member_turn);
+
+    let message_output = MultiAgentHandler
+        .handle(invocation(
+            member_session,
+            member_turn,
+            "team_message",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+                "member_name": "worker",
+                "message": "handoff"
+            })),
+        ))
+        .await
+        .expect("team_message should authorize member sender via persisted config");
+    let ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(message_content),
+        ..
+    } = message_output
+    else {
+        panic!("expected function output");
+    };
+    let message_result: TeamMessageResult =
+        serde_json::from_str(&message_content).expect("team_message result should be json");
+    assert_eq!(message_result.agent_id, worker_id.to_string());
+
+    let inbox_file = inbox::inbox_dir(codex_home.as_path(), &message_result.team_id)
+        .join(format!("{worker_id}.jsonl"));
+    let inbox_raw = tokio::fs::read_to_string(inbox_file)
+        .await
+        .expect("worker inbox should exist");
+    let first_line = inbox_raw.lines().next().expect("inbox should have a line");
+    let entry: inbox::TeamInboxEntry =
+        serde_json::from_str(first_line).expect("inbox line should parse");
+    assert_eq!(entry.from_thread_id, planner_id.to_string());
+    assert_eq!(entry.from_name, Some("member".to_string()));
+}
+
+#[tokio::test]
+async fn team_broadcast_respects_persisted_leaders_and_broadcast_policy() {
+    let (mut owner_session, mut owner_turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    owner_session.services.agent_control = manager.agent_control();
+    enable_agent_org(&mut owner_turn);
+
+    let owner_session = Arc::new(owner_session);
+    let owner_turn = Arc::new(owner_turn);
+
+    let spawn_output = MultiAgentHandler
+        .handle(invocation(
+            owner_session.clone(),
+            owner_turn.clone(),
+            "spawn_team",
+            function_payload(json!({
+                "members": [
+                    {"name": "planner", "task": "plan"},
+                    {"name": "worker", "task": "work"}
+                ]
+            })),
+        ))
+        .await
+        .expect("spawn_team should succeed");
+    let ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(spawn_content),
+        ..
+    } = spawn_output
+    else {
+        panic!("expected function output");
+    };
+    let spawn_result: SpawnTeamResult =
+        serde_json::from_str(&spawn_content).expect("spawn_team result should be json");
+    let planner_id = spawn_result.members[0].agent_id.clone();
+
+    let config_update_output = MultiAgentHandler
+        .handle(invocation(
+            owner_session.clone(),
+            owner_turn.clone(),
+            "team_update_config",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+                "leader_names": ["planner"],
+                "broadcast_policy": "leaders_only"
+            })),
+        ))
+        .await
+        .expect("owner should update team config");
+    let ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(config_update_content),
+        ..
+    } = config_update_output
+    else {
+        panic!("expected function output");
+    };
+    let config_update_result: serde_json::Value = serde_json::from_str(&config_update_content)
+        .expect("team_update_config result should be json");
+    assert_eq!(
+        config_update_result["leader_names"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        vec![json!("planner")]
+    );
+    assert_eq!(
+        config_update_result["leader_thread_ids"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        vec![json!(planner_id.clone())]
+    );
+    assert_eq!(
+        config_update_result["broadcast_policy"].as_str(),
+        Some("leaders_only")
+    );
+
+    let (mut leader_session, mut leader_turn) = make_session_and_context().await;
+    leader_session.services.agent_control = manager.agent_control();
+    leader_session.conversation_id = agent_id(&planner_id).expect("valid planner id");
+    leader_turn.config = owner_turn.config.clone();
+    let leader_session = Arc::new(leader_session);
+    let leader_turn = Arc::new(leader_turn);
+
+    let Err(err) = MultiAgentHandler
+        .handle(invocation(
+            leader_session.clone(),
+            leader_turn.clone(),
+            "team_update_config",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+                "broadcast_policy": "team_members"
+            })),
+        ))
+        .await
+    else {
+        panic!("leader should not update team config");
+    };
+    assert!(err.to_string().contains("only the team owner"));
+
+    let team_info_output = MultiAgentHandler
+        .handle(invocation(
+            leader_session.clone(),
+            leader_turn.clone(),
+            "team_info",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+            })),
+        ))
+        .await
+        .expect("leader should read persisted team metadata");
+    let ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(team_info_content),
+        ..
+    } = team_info_output
+    else {
+        panic!("expected function output");
+    };
+    let team_info_result: serde_json::Value =
+        serde_json::from_str(&team_info_content).expect("team_info result should be json");
+    assert_eq!(team_info_result["schema_version"].as_u64(), Some(2));
+    assert_eq!(
+        team_info_result["leaders"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        vec![json!(planner_id.clone())]
+    );
+    assert_eq!(
+        team_info_result["broadcast_policy"].as_str(),
+        Some("leaders_only")
+    );
+
+    let broadcast_output = MultiAgentHandler
+        .handle(invocation(
+            leader_session.clone(),
+            leader_turn.clone(),
+            "team_broadcast",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+                "message": "sync up"
+            })),
+        ))
+        .await
+        .expect("leader should be allowed by leaders_only broadcast policy");
+    let ToolOutput::Function {
+        body: FunctionCallOutputBody::Text(broadcast_content),
+        ..
+    } = broadcast_output
+    else {
+        panic!("expected function output");
+    };
+    let broadcast_result: TeamBroadcastResult =
+        serde_json::from_str(&broadcast_content).expect("team_broadcast result should be json");
+    assert_eq!(
+        broadcast_result.sent.len() + broadcast_result.failed.len(),
+        1
+    );
+
+    MultiAgentHandler
+        .handle(invocation(
+            owner_session,
+            owner_turn,
+            "team_update_config",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+                "broadcast_policy": "owner_only"
+            })),
+        ))
+        .await
+        .expect("owner should tighten broadcast policy");
+
+    let Err(err) = MultiAgentHandler
+        .handle(invocation(
+            leader_session,
+            leader_turn,
+            "team_broadcast",
+            function_payload(json!({
+                "team_id": spawn_result.team_id,
+                "message": "should fail"
+            })),
+        ))
+        .await
+    else {
+        panic!("leader should be blocked by owner_only broadcast policy");
+    };
+    assert!(err.to_string().contains("does not allow role `leader`"));
 }
 
 #[tokio::test]
