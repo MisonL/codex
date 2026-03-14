@@ -16,8 +16,11 @@ struct TeamInfoMember {
 #[derive(Debug, Serialize)]
 struct TeamInfoResult {
     team_id: String,
+    schema_version: u32,
     team_name: String,
     lead_thread_id: String,
+    leaders: Vec<String>,
+    broadcast_policy: String,
     created_at: i64,
     members: Vec<TeamInfoMember>,
 }
@@ -37,7 +40,7 @@ pub async fn handle(
     let args: TeamInfoArgs = parse_arguments(&arguments)?;
     let team_id = normalized_team_id(&args.team_id)?;
     let config = read_persisted_team_config(turn.config.codex_home.as_path(), &team_id).await?;
-    assert_team_member_or_lead(&team_id, &config, session.conversation_id)?;
+    assert_persisted_team_participant(&team_id, &config, session.conversation_id)?;
 
     let members = config
         .members
@@ -51,8 +54,11 @@ pub async fn handle(
 
     let content = serde_json::to_string(&TeamInfoResult {
         team_id,
+        schema_version: config.schema_version,
         team_name: config.team_name,
         lead_thread_id: config.lead_thread_id,
+        leaders: config.leaders,
+        broadcast_policy: config.broadcast_policy.as_str().to_string(),
         created_at: config.created_at,
         members,
     })

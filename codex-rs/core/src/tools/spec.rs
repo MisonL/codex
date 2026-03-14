@@ -1547,6 +1547,48 @@ fn create_team_info_tool() -> ToolSpec {
     })
 }
 
+fn create_team_update_config_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "team_id".to_string(),
+            JsonSchema::String {
+                description: Some("Team id returned by spawn_team.".to_string()),
+            },
+        ),
+        (
+            "leader_names".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some(
+                    "Optional member names to promote as leaders. Provide an empty list to clear leaders."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "broadcast_policy".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional broadcast policy. Supported values: `owner_only`, `leaders_only`, or `team_members`."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "team_update_config".to_string(),
+        description: "Update persisted team leadership and broadcast policy (experimental)."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["team_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_team_message_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2767,8 +2809,10 @@ pub(crate) fn build_specs(
         let multi_agent_handler = Arc::new(MultiAgentHandler);
         builder.push_spec_with_parallel_support(create_team_current_tool(), true);
         builder.push_spec_with_parallel_support(create_team_info_tool(), true);
+        builder.push_spec_with_parallel_support(create_team_update_config_tool(), true);
         builder.register_handler("team_current", multi_agent_handler.clone());
-        builder.register_handler("team_info", multi_agent_handler);
+        builder.register_handler("team_info", multi_agent_handler.clone());
+        builder.register_handler("team_update_config", multi_agent_handler);
     }
 
     if config.agent_jobs_tools || config.agent_jobs_worker_tools {

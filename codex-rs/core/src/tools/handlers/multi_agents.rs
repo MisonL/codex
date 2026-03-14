@@ -126,8 +126,14 @@ fn worktree_leases() -> &'static Mutex<WorktreeLeaseRegistry> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedTeamConfig {
+    #[serde(default = "default_team_schema_version")]
+    schema_version: u32,
     team_name: String,
     lead_thread_id: String,
+    #[serde(default)]
+    leaders: Vec<String>,
+    #[serde(default)]
+    broadcast_policy: PersistedBroadcastPolicy,
     created_at: i64,
     members: Vec<PersistedTeamMember>,
 }
@@ -138,6 +144,39 @@ struct PersistedTeamMember {
     name: String,
     agent_id: String,
     agent_type: Option<String>,
+}
+
+fn default_team_schema_version() -> u32 {
+    2
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PersistedBroadcastPolicy {
+    OwnerOnly,
+    #[default]
+    LeadersOnly,
+    TeamMembers,
+}
+
+impl PersistedBroadcastPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            PersistedBroadcastPolicy::OwnerOnly => "owner_only",
+            PersistedBroadcastPolicy::LeadersOnly => "leaders_only",
+            PersistedBroadcastPolicy::TeamMembers => "team_members",
+        }
+    }
+
+    fn allows(self, caller_role: CallerTeamRole) -> bool {
+        match self {
+            PersistedBroadcastPolicy::OwnerOnly => matches!(caller_role, CallerTeamRole::Owner),
+            PersistedBroadcastPolicy::LeadersOnly => {
+                matches!(caller_role, CallerTeamRole::Owner | CallerTeamRole::Leader)
+            }
+            PersistedBroadcastPolicy::TeamMembers => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -181,6 +220,10 @@ fn team_config_path(codex_home: &Path, team_id: &str) -> PathBuf {
     team_dir(codex_home, team_id).join("config.json")
 }
 
+fn team_config_lock_path(codex_home: &Path, team_id: &str) -> PathBuf {
+    team_dir(codex_home, team_id).join("config.lock")
+}
+
 async fn read_persisted_team_config(
     codex_home: &Path,
     team_id: &str,
@@ -202,14 +245,16 @@ async fn read_persisted_team_config(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CallerTeamRole {
-    Lead,
+    Owner,
+    Leader,
     Member,
 }
 
 impl CallerTeamRole {
     fn as_str(self) -> &'static str {
         match self {
-            CallerTeamRole::Lead => "lead",
+            CallerTeamRole::Owner => "owner",
+            CallerTeamRole::Leader => "leader",
             CallerTeamRole::Member => "member",
         }
     }
@@ -274,16 +319,8 @@ async fn find_persisted_team_for_thread(
         let Some(config) = try_read_persisted_team_config(codex_home, &team_id).await? else {
             continue;
         };
-        if config.lead_thread_id == caller {
-            matches.push((team_id, config, CallerTeamRole::Lead));
-            continue;
-        }
-        if config
-            .members
-            .iter()
-            .any(|member| member.agent_id == caller)
-        {
-            matches.push((team_id, config, CallerTeamRole::Member));
+        if let Some(role) = persisted_team_role(&config, &caller) {
+            matches.push((team_id, config, role));
         }
     }
 
@@ -299,6 +336,40 @@ async fn find_persisted_team_for_thread(
                 .join(", ")
         ))),
     }
+}
+
+fn persisted_team_role(
+    config: &PersistedTeamConfig,
+    caller_thread_id: &str,
+) -> Option<CallerTeamRole> {
+    if config.lead_thread_id == caller_thread_id {
+        return Some(CallerTeamRole::Owner);
+    }
+    if config
+        .leaders
+        .iter()
+        .any(|leader_thread_id| leader_thread_id == caller_thread_id)
+    {
+        return Some(CallerTeamRole::Leader);
+    }
+    config
+        .members
+        .iter()
+        .any(|member| member.agent_id == caller_thread_id)
+        .then_some(CallerTeamRole::Member)
+}
+
+fn assert_persisted_team_participant(
+    team_id: &str,
+    config: &PersistedTeamConfig,
+    caller_thread_id: ThreadId,
+) -> Result<CallerTeamRole, FunctionCallError> {
+    let caller_thread_id = caller_thread_id.to_string();
+    persisted_team_role(config, &caller_thread_id).ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "thread `{caller_thread_id}` is not a participant of team `{team_id}`"
+        ))
+    })
 }
 
 fn assert_team_member_or_lead(
@@ -337,6 +408,20 @@ async fn lock_team_tasks(
     locks::lock_file_exclusive(&lock_path)
         .await
         .map_err(|err| team_persistence_error("lock team tasks", team_id, err))
+}
+
+async fn lock_team_config(
+    codex_home: &Path,
+    team_id: &str,
+) -> Result<locks::FileLockGuard, FunctionCallError> {
+    let config_dir = team_dir(codex_home, team_id);
+    tokio::fs::create_dir_all(&config_dir)
+        .await
+        .map_err(|err| team_persistence_error("create team config directory", team_id, err))?;
+    let lock_path = team_config_lock_path(codex_home, team_id);
+    locks::lock_file_exclusive(&lock_path)
+        .await
+        .map_err(|err| team_persistence_error("lock team config", team_id, err))
 }
 
 fn team_task_path(codex_home: &Path, team_id: &str, task_id: &str) -> PathBuf {
@@ -387,8 +472,11 @@ fn persisted_team_config(
     team: &TeamRecord,
 ) -> PersistedTeamConfig {
     PersistedTeamConfig {
+        schema_version: default_team_schema_version(),
         team_name: team_id.to_string(),
         lead_thread_id: sender_thread_id.to_string(),
+        leaders: Vec::new(),
+        broadcast_policy: PersistedBroadcastPolicy::default(),
         created_at: team.created_at,
         members: team
             .members
@@ -752,6 +840,9 @@ impl ToolHandler for MultiAgentHandler {
             "team_cleanup" => team_cleanup::handle(session, turn, call_id, arguments).await,
             "team_current" => team_current::handle(session, turn, call_id, arguments).await,
             "team_info" => team_info::handle(session, turn, call_id, arguments).await,
+            "team_update_config" => {
+                team_update_config::handle(session, turn, call_id, arguments).await
+            }
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -780,6 +871,8 @@ mod wait;
 mod team_current;
 
 mod team_info;
+
+mod team_update_config;
 
 #[derive(Debug)]
 struct WaitForAgentsResult {

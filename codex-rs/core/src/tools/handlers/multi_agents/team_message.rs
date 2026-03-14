@@ -30,16 +30,34 @@ pub async fn handle(
 ) -> Result<ToolOutput, FunctionCallError> {
     let args: TeamMessageArgs = parse_arguments(&arguments)?;
     let team_id = normalized_team_id(&args.team_id)?;
-    let team = get_team_record(session.conversation_id, &team_id)?;
-    let member = find_team_member(&team, &team_id, &args.member_name)?;
     let input_items = parse_collab_input(args.message, args.items)?;
     let prompt = input_preview(&input_items);
+    let (receiver_thread_id, sender_name) = if turn.config.features.enabled(Feature::AgentOrg) {
+        let config = read_persisted_team_config(turn.config.codex_home.as_path(), &team_id).await?;
+        let sender_role =
+            assert_persisted_team_participant(&team_id, &config, session.conversation_id)?;
+        let member = config
+            .members
+            .iter()
+            .find(|member| member.name == args.member_name.trim())
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "member `{}` not found in team `{team_id}`",
+                    args.member_name.trim()
+                ))
+            })?;
+        (agent_id(&member.agent_id)?, Some(sender_role.as_str()))
+    } else {
+        let team = get_team_record(session.conversation_id, &team_id)?;
+        let member = find_team_member(&team, &team_id, &args.member_name)?;
+        (member.agent_id, Some("lead"))
+    };
     let inbox_entry_id = inbox::append_inbox_entry(
         turn.config.codex_home.as_path(),
         &team_id,
-        member.agent_id,
+        receiver_thread_id,
         session.conversation_id,
-        Some("lead"),
+        sender_name,
         &input_items,
         &prompt,
     )
@@ -49,7 +67,7 @@ pub async fn handle(
         &session,
         &turn,
         call_id,
-        member.agent_id,
+        receiver_thread_id,
         input_items,
         prompt,
         args.interrupt,
@@ -63,8 +81,8 @@ pub async fn handle(
 
     let content = serde_json::to_string(&TeamMessageResult {
         team_id,
-        member_name: member.name,
-        agent_id: member.agent_id.to_string(),
+        member_name: args.member_name.trim().to_string(),
+        agent_id: receiver_thread_id.to_string(),
         submission_id,
         delivered,
         inbox_entry_id,

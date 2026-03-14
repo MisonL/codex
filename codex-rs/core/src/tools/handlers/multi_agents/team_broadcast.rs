@@ -41,20 +41,52 @@ pub async fn handle(
 ) -> Result<ToolOutput, FunctionCallError> {
     let args: TeamBroadcastArgs = parse_arguments(&arguments)?;
     let team_id = normalized_team_id(&args.team_id)?;
-    let team = get_team_record(session.conversation_id, &team_id)?;
     let input_items = parse_collab_input(args.message, args.items)?;
     let prompt = input_preview(&input_items);
     let mut sent = Vec::new();
     let mut failed = Vec::new();
+    let sender_thread_id = session.conversation_id;
+    let (targets, sender_name) = if turn.config.features.enabled(Feature::AgentOrg) {
+        let config = read_persisted_team_config(turn.config.codex_home.as_path(), &team_id).await?;
+        let sender_role =
+            assert_persisted_team_participant(&team_id, &config, session.conversation_id)?;
+        if !config.broadcast_policy.allows(sender_role) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "broadcast policy `{}` does not allow role `{}` in team `{team_id}`",
+                config.broadcast_policy.as_str(),
+                sender_role.as_str()
+            )));
+        }
+        (
+            config
+                .members
+                .into_iter()
+                .filter_map(|member| {
+                    let receiver_thread_id = agent_id(&member.agent_id).ok()?;
+                    (receiver_thread_id != sender_thread_id).then_some(TeamMember {
+                        name: member.name,
+                        agent_id: receiver_thread_id,
+                        agent_type: member.agent_type,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            Some(sender_role.as_str()),
+        )
+    } else {
+        (
+            get_team_record(session.conversation_id, &team_id)?.members,
+            Some("lead"),
+        )
+    };
 
-    for member in &team.members {
+    for member in &targets {
         let member_call_id = format!("{call_id}:{}", member.name);
         let inbox_entry_id = match inbox::append_inbox_entry(
             turn.config.codex_home.as_path(),
             &team_id,
             member.agent_id,
             session.conversation_id,
-            Some("lead"),
+            sender_name,
             &input_items,
             &prompt,
         )
