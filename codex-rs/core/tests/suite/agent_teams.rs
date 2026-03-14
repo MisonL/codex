@@ -704,6 +704,285 @@ async fn agent_org_team_current_reports_team_for_spawned_member() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_org_org_create_persists_config_and_dirs() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::AgentOrg)
+            .expect("enable AgentOrg");
+    });
+    let test = builder.build(&server).await?;
+
+    let org_id = "e2e-org-create";
+    let create_call_id = "call-org-create";
+    let create_args = json!({
+        "org_id": org_id,
+        "org_name": "demo-org"
+    })
+    .to_string();
+    let create_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-create-1"),
+                ev_function_call(create_call_id, "org_create", &create_args),
+                ev_completed("resp-org-create-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-create-1", "created"),
+                ev_completed("resp-org-create-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("create org").await?;
+
+    let create_output = tool_output_json(&create_mock, create_call_id).await?;
+    assert_eq!(create_output["org_id"].as_str(), Some(org_id));
+    assert_eq!(create_output["created"].as_bool(), Some(true));
+    let president_thread_id = create_output["president_thread_id"]
+        .as_str()
+        .context("president_thread_id missing")?;
+
+    let org_root = test.codex_home_path().join("orgs").join(org_id);
+    let org_config_path = org_root.join("config.json");
+    assert_eq!(org_config_path.exists(), true);
+
+    let raw_config = std::fs::read_to_string(&org_config_path)?;
+    let config: Value = serde_json::from_str(&raw_config)?;
+    assert_eq!(config["orgId"].as_str(), Some(org_id));
+    assert_eq!(
+        config["presidentThreadId"].as_str(),
+        Some(president_thread_id)
+    );
+    assert_eq!(config["schemaVersion"].as_u64(), Some(2));
+
+    let inbox_dir = org_root.join("inbox");
+    assert_eq!(inbox_dir.exists(), true);
+
+    let events_path = org_root.join("events.jsonl");
+    assert_eq!(events_path.exists(), true);
+    let raw_events = std::fs::read_to_string(events_path)?;
+    let first_line = raw_events
+        .lines()
+        .next()
+        .context("expected at least one org event")?;
+    let event: Value = serde_json::from_str(first_line)?;
+    assert_eq!(event["kind"].as_str(), Some("org.created"));
+    assert_eq!(event["sequence"].as_u64(), Some(1));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_org_org_register_team_attaches_team_and_updates_configs() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable Collab");
+        config
+            .features
+            .enable(Feature::AgentOrg)
+            .expect("enable AgentOrg");
+    });
+    let test = builder.build(&server).await?;
+
+    let team_id = "e2e-team-org-register";
+    let spawn_call_id = "call-org-register-spawn-team";
+    let spawn_args = json!({
+        "team_id": team_id,
+        "members": [
+            {"name": "worker", "task": "Reply with ok.", "agent_type": "develop"}
+        ]
+    })
+    .to_string();
+    let spawn_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-register-spawn-1"),
+                ev_function_call(spawn_call_id, "spawn_team", &spawn_args),
+                ev_completed("resp-org-register-spawn-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-register-spawn-1", "spawned"),
+                ev_completed("resp-org-register-spawn-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("spawn team").await?;
+
+    let spawn_output = tool_output_json(&spawn_mock, spawn_call_id).await?;
+    assert_eq!(spawn_output["team_id"].as_str(), Some(team_id));
+
+    let set_leaders_call_id = "call-org-register-team-update-config";
+    let set_leaders_args = json!({
+        "team_id": team_id,
+        "leader_names": ["worker"]
+    })
+    .to_string();
+    let set_leaders_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-register-update-1"),
+                ev_function_call(set_leaders_call_id, "team_update_config", &set_leaders_args),
+                ev_completed("resp-org-register-update-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-register-update-1", "updated"),
+                ev_completed("resp-org-register-update-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("set leaders").await?;
+
+    let set_leaders_output = tool_output_json(&set_leaders_mock, set_leaders_call_id).await?;
+    assert_eq!(set_leaders_output["team_id"].as_str(), Some(team_id));
+    assert_eq!(
+        set_leaders_output["leader_names"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let org_id = "e2e-org-register";
+    let create_call_id = "call-org-register-org-create";
+    let create_args = json!({ "org_id": org_id }).to_string();
+    let create_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-register-create-1"),
+                ev_function_call(create_call_id, "org_create", &create_args),
+                ev_completed("resp-org-register-create-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-register-create-1", "created"),
+                ev_completed("resp-org-register-create-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("create org").await?;
+
+    let create_output = tool_output_json(&create_mock, create_call_id).await?;
+    assert_eq!(create_output["org_id"].as_str(), Some(org_id));
+    assert_eq!(create_output["created"].as_bool(), Some(true));
+
+    let register_call_id = "call-org-register-team";
+    let register_args = json!({
+        "org_id": org_id,
+        "team_id": team_id
+    })
+    .to_string();
+    let register_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-register-team-1"),
+                ev_function_call(register_call_id, "org_register_team", &register_args),
+                ev_completed("resp-org-register-team-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-register-team-1", "registered"),
+                ev_completed("resp-org-register-team-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("register team").await?;
+
+    let register_output = tool_output_json(&register_mock, register_call_id).await?;
+    assert_eq!(register_output["org_id"].as_str(), Some(org_id));
+    assert_eq!(register_output["team_id"].as_str(), Some(team_id));
+    assert_eq!(register_output["changed"].as_bool(), Some(true));
+    assert_eq!(
+        register_output["owner_thread_id"]
+            .as_str()
+            .map(str::is_empty),
+        Some(false)
+    );
+    assert_eq!(register_output["leaders"].as_array().map(Vec::len), Some(1));
+
+    let team_config_path = test
+        .codex_home_path()
+        .join("teams")
+        .join(team_id)
+        .join("config.json");
+    let raw_team_config = std::fs::read_to_string(&team_config_path)?;
+    let team_config: Value = serde_json::from_str(&raw_team_config)?;
+    assert_eq!(team_config["orgId"].as_str(), Some(org_id));
+
+    let org_config_path = test
+        .codex_home_path()
+        .join("orgs")
+        .join(org_id)
+        .join("config.json");
+    let raw_org_config = std::fs::read_to_string(&org_config_path)?;
+    let org_config: Value = serde_json::from_str(&raw_org_config)?;
+    let org_teams = org_config["teams"]
+        .as_array()
+        .context("org teams should be an array")?;
+    assert_eq!(org_teams.len(), 1);
+    assert_eq!(org_teams[0]["teamId"].as_str(), Some(team_id));
+    assert_eq!(
+        org_teams[0]["ownerThreadId"].as_str().map(str::is_empty),
+        Some(false)
+    );
+    assert_eq!(org_teams[0]["leaders"].as_array().map(Vec::len), Some(1));
+
+    let org_events_path = test
+        .codex_home_path()
+        .join("orgs")
+        .join(org_id)
+        .join("events.jsonl");
+    let raw_org_events = std::fs::read_to_string(org_events_path)?;
+    let kinds = raw_org_events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            event
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec!["org.created".to_string(), "org.team.registered".to_string()]
+    );
+
+    let team_events_path = test
+        .codex_home_path()
+        .join("teams")
+        .join(team_id)
+        .join("events.jsonl");
+    let raw_team_events = std::fs::read_to_string(team_events_path)?;
+    let team_first_line = raw_team_events
+        .lines()
+        .next()
+        .context("expected at least one team event")?;
+    let team_event: Value = serde_json::from_str(team_first_line)?;
+    assert_eq!(team_event["kind"].as_str(), Some("team.config.updated"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_team_worktree_members_create_and_cleanup() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
