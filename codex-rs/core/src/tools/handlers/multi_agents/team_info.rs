@@ -18,6 +18,7 @@ struct TeamInfoResult {
     team_id: String,
     schema_version: u32,
     team_name: String,
+    org_id: Option<String>,
     lead_thread_id: String,
     leaders: Vec<String>,
     broadcast_policy: String,
@@ -42,6 +43,7 @@ pub async fn handle(
     let config = read_persisted_team_config(turn.config.codex_home.as_path(), &team_id).await?;
     assert_persisted_team_participant(&team_id, &config, session.conversation_id)?;
 
+    let org_id = config.org_id.clone();
     let members = config
         .members
         .into_iter()
@@ -56,6 +58,7 @@ pub async fn handle(
         team_id,
         schema_version: config.schema_version,
         team_name: config.team_name,
+        org_id,
         lead_thread_id: config.lead_thread_id,
         leaders: config.leaders,
         broadcast_policy: config.broadcast_policy.as_str().to_string(),

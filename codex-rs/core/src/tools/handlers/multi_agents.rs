@@ -57,6 +57,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
@@ -76,6 +79,7 @@ pub(crate) const TEAM_WAIT_CALL_PREFIX: &str = "team/wait:";
 pub(crate) const TEAM_CLOSE_CALL_PREFIX: &str = "team/close:";
 const TEAM_CONFIG_DIR: &str = "teams";
 const TEAM_TASKS_DIR: &str = "tasks";
+const ORG_CONFIG_DIR: &str = "orgs";
 const WORKTREE_ROOT_DIR: &str = "worktrees";
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +133,8 @@ struct PersistedTeamConfig {
     #[serde(default = "default_team_schema_version")]
     schema_version: u32,
     team_name: String,
+    #[serde(default)]
+    org_id: Option<String>,
     lead_thread_id: String,
     #[serde(default)]
     leaders: Vec<String>,
@@ -144,6 +150,48 @@ struct PersistedTeamMember {
     name: String,
     agent_id: String,
     agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PersistedExperienceProfile {
+    #[default]
+    Steward,
+    Flux,
+}
+
+impl PersistedExperienceProfile {
+    fn as_str(self) -> &'static str {
+        match self {
+            PersistedExperienceProfile::Steward => "steward",
+            PersistedExperienceProfile::Flux => "flux",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedOrgConfig {
+    #[serde(default = "default_team_schema_version")]
+    schema_version: u32,
+    org_id: String,
+    #[serde(default)]
+    org_name: Option<String>,
+    president_thread_id: String,
+    created_at: i64,
+    #[serde(default)]
+    experience_profile: PersistedExperienceProfile,
+    #[serde(default)]
+    teams: Vec<PersistedOrgTeamRef>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PersistedOrgTeamRef {
+    team_id: String,
+    owner_thread_id: String,
+    #[serde(default)]
+    leaders: Vec<String>,
 }
 
 fn default_team_schema_version() -> u32 {
@@ -224,6 +272,18 @@ fn team_config_lock_path(codex_home: &Path, team_id: &str) -> PathBuf {
     team_dir(codex_home, team_id).join("config.lock")
 }
 
+fn org_dir(codex_home: &Path, org_id: &str) -> PathBuf {
+    codex_home.join(ORG_CONFIG_DIR).join(org_id)
+}
+
+fn org_config_path(codex_home: &Path, org_id: &str) -> PathBuf {
+    org_dir(codex_home, org_id).join("config.json")
+}
+
+fn org_config_lock_path(codex_home: &Path, org_id: &str) -> PathBuf {
+    org_dir(codex_home, org_id).join("config.lock")
+}
+
 async fn read_persisted_team_config(
     codex_home: &Path,
     team_id: &str,
@@ -241,6 +301,25 @@ async fn read_persisted_team_config(
 
     serde_json::from_str::<PersistedTeamConfig>(&raw)
         .map_err(|err| team_persistence_error("parse team config", team_id, err))
+}
+
+async fn read_persisted_org_config(
+    codex_home: &Path,
+    org_id: &str,
+) -> Result<PersistedOrgConfig, FunctionCallError> {
+    let config_path = org_config_path(codex_home, org_id);
+    let raw = match tokio::fs::read_to_string(&config_path).await {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "org `{org_id}` not found"
+            )));
+        }
+        Err(err) => return Err(org_persistence_error("read org config", org_id, err)),
+    };
+
+    serde_json::from_str::<PersistedOrgConfig>(&raw)
+        .map_err(|err| org_persistence_error("parse org config", org_id, err))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,6 +503,20 @@ async fn lock_team_config(
         .map_err(|err| team_persistence_error("lock team config", team_id, err))
 }
 
+async fn lock_org_config(
+    codex_home: &Path,
+    org_id: &str,
+) -> Result<locks::FileLockGuard, FunctionCallError> {
+    let config_dir = org_dir(codex_home, org_id);
+    tokio::fs::create_dir_all(&config_dir)
+        .await
+        .map_err(|err| org_persistence_error("create org config directory", org_id, err))?;
+    let lock_path = org_config_lock_path(codex_home, org_id);
+    locks::lock_file_exclusive(&lock_path)
+        .await
+        .map_err(|err| org_persistence_error("lock org config", org_id, err))
+}
+
 fn team_task_path(codex_home: &Path, team_id: &str, task_id: &str) -> PathBuf {
     team_tasks_dir(codex_home, team_id).join(format!("{task_id}.json"))
 }
@@ -434,6 +527,14 @@ fn team_persistence_error(
     err: impl std::fmt::Display,
 ) -> FunctionCallError {
     FunctionCallError::RespondToModel(format!("failed to {action} for team `{team_id}`: {err}"))
+}
+
+fn org_persistence_error(
+    action: impl std::fmt::Display,
+    org_id: &str,
+    err: impl std::fmt::Display,
+) -> FunctionCallError {
+    FunctionCallError::RespondToModel(format!("failed to {action} for org `{org_id}`: {err}"))
 }
 
 async fn remove_dir_if_exists(path: &Path) -> Result<(), std::io::Error> {
@@ -466,6 +567,46 @@ async fn write_json_atomic<T: Serialize>(path: &Path, payload: &T) -> Result<(),
     Ok(())
 }
 
+fn team_events_path(codex_home: &Path, team_id: &str) -> PathBuf {
+    team_dir(codex_home, team_id).join("events.jsonl")
+}
+
+fn org_events_path(codex_home: &Path, org_id: &str) -> PathBuf {
+    org_dir(codex_home, org_id).join("events.jsonl")
+}
+
+async fn next_jsonl_sequence(path: &Path) -> Result<u64, std::io::Error> {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(1),
+        Err(err) => return Err(err),
+    };
+
+    let mut count = 0u64;
+    let mut reader = BufReader::new(file).lines();
+    while let Some(_) = reader.next_line().await? {
+        count += 1;
+    }
+
+    Ok(count + 1)
+}
+
+async fn append_jsonl_entry<T: Serialize>(path: &Path, entry: &T) -> Result<(), std::io::Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("path has no parent"))?;
+    tokio::fs::create_dir_all(parent).await?;
+    let mut serialized = serde_json::to_string(entry).map_err(std::io::Error::other)?;
+    serialized.push('\n');
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+    file.write_all(serialized.as_bytes()).await?;
+    Ok(())
+}
+
 fn persisted_team_config(
     sender_thread_id: ThreadId,
     team_id: &str,
@@ -474,6 +615,7 @@ fn persisted_team_config(
     PersistedTeamConfig {
         schema_version: default_team_schema_version(),
         team_name: team_id.to_string(),
+        org_id: None,
         lead_thread_id: sender_thread_id.to_string(),
         leaders: Vec::new(),
         broadcast_policy: PersistedBroadcastPolicy::default(),
@@ -843,6 +985,10 @@ impl ToolHandler for MultiAgentHandler {
             "team_update_config" => {
                 team_update_config::handle(session, turn, call_id, arguments).await
             }
+            "org_create" => org_create::handle(session, turn, call_id, arguments).await,
+            "org_register_team" => {
+                org_register_team::handle(session, turn, call_id, arguments).await
+            }
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -873,6 +1019,10 @@ mod team_current;
 mod team_info;
 
 mod team_update_config;
+
+mod org_create;
+
+mod org_register_team;
 
 #[derive(Debug)]
 struct WaitForAgentsResult {
@@ -1031,6 +1181,10 @@ async fn wait_for_agents(
 
 fn normalized_team_id(team_id: &str) -> Result<String, FunctionCallError> {
     Ok(required_path_segment(team_id, "team_id")?.to_string())
+}
+
+fn normalized_org_id(org_id: &str) -> Result<String, FunctionCallError> {
+    Ok(required_path_segment(org_id, "org_id")?.to_string())
 }
 
 fn optional_non_empty<'a>(

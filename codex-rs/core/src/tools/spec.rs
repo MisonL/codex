@@ -1589,6 +1589,71 @@ fn create_team_update_config_tool() -> ToolSpec {
     })
 }
 
+fn create_org_create_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "org_id".to_string(),
+            JsonSchema::String {
+                description: Some("Org id for persisted configuration.".to_string()),
+            },
+        ),
+        (
+            "org_name".to_string(),
+            JsonSchema::String {
+                description: Some("Optional org display name.".to_string()),
+            },
+        ),
+        (
+            "experience_profile".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional experience profile. Supported values: `steward` or `flux`."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "org_create".to_string(),
+        description: "Create a persisted agent organization (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["org_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_org_register_team_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "org_id".to_string(),
+            JsonSchema::String {
+                description: Some("Org id returned by org_create.".to_string()),
+            },
+        ),
+        (
+            "team_id".to_string(),
+            JsonSchema::String {
+                description: Some("Team id returned by spawn_team.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "org_register_team".to_string(),
+        description: "Attach a team to an org (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["org_id".to_string(), "team_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_team_message_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2810,9 +2875,13 @@ pub(crate) fn build_specs(
         builder.push_spec_with_parallel_support(create_team_current_tool(), true);
         builder.push_spec_with_parallel_support(create_team_info_tool(), true);
         builder.push_spec_with_parallel_support(create_team_update_config_tool(), true);
+        builder.push_spec_with_parallel_support(create_org_create_tool(), true);
+        builder.push_spec_with_parallel_support(create_org_register_team_tool(), true);
         builder.register_handler("team_current", multi_agent_handler.clone());
         builder.register_handler("team_info", multi_agent_handler.clone());
-        builder.register_handler("team_update_config", multi_agent_handler);
+        builder.register_handler("team_update_config", multi_agent_handler.clone());
+        builder.register_handler("org_create", multi_agent_handler.clone());
+        builder.register_handler("org_register_team", multi_agent_handler);
     }
 
     if config.agent_jobs_tools || config.agent_jobs_worker_tools {

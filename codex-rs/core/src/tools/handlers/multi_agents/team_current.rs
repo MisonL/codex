@@ -8,6 +8,7 @@ struct TeamCurrentArgs {}
 struct TeamCurrentResult {
     team_id: Option<String>,
     team_name: Option<String>,
+    org_id: Option<String>,
     role: Option<String>,
     lead_thread_id: Option<String>,
 }
@@ -35,12 +36,14 @@ pub async fn handle(
         Some((team_id, config, role)) => TeamCurrentResult {
             team_id: Some(team_id),
             team_name: Some(config.team_name),
+            org_id: config.org_id,
             role: Some(role.as_str().to_string()),
             lead_thread_id: Some(config.lead_thread_id),
         },
         None => TeamCurrentResult {
             team_id: None,
             team_name: None,
+            org_id: None,
             role: None,
             lead_thread_id: None,
         },
