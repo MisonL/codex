@@ -133,6 +133,7 @@ pub async fn handle(
     let created_at = now_unix_seconds();
     if org_changed {
         let events_path = org_events_path(codex_home, &org_id);
+        let _events_lock = lock_org_events(codex_home, &org_id).await?;
         let sequence = next_jsonl_sequence(&events_path)
             .await
             .map_err(|err| org_persistence_error("compute org event sequence", &org_id, err))?;
@@ -156,6 +157,7 @@ pub async fn handle(
     }
     if team_changed {
         let events_path = team_events_path(codex_home, &team_id);
+        let _events_lock = lock_team_events(codex_home, &team_id).await?;
         let sequence = next_jsonl_sequence(&events_path)
             .await
             .map_err(|err| team_persistence_error("compute team event sequence", &team_id, err))?;

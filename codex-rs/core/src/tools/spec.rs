@@ -1654,6 +1654,123 @@ fn create_org_register_team_tool() -> ToolSpec {
     })
 }
 
+fn create_org_info_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "org_id".to_string(),
+        JsonSchema::String {
+            description: Some("Org id returned by org_create.".to_string()),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "org_info".to_string(),
+        description: "Return persisted org metadata (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["org_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_org_inbox_pop_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "org_id".to_string(),
+            JsonSchema::String {
+                description: Some("Org id returned by org_create.".to_string()),
+            },
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some("Maximum number of messages to return (1-500).".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "org_inbox_pop".to_string(),
+        description: "Pop messages from the caller's durable org inbox (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["org_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_org_inbox_ack_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "org_id".to_string(),
+            JsonSchema::String {
+                description: Some("Org id returned by org_create.".to_string()),
+            },
+        ),
+        (
+            "ack_token".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Ack token returned by org_inbox_pop. Empty string is treated as no-op."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "org_inbox_ack".to_string(),
+        description: "Acknowledge previously popped org inbox messages (experimental).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["org_id".to_string(), "ack_token".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_org_principal_message_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "org_id".to_string(),
+            JsonSchema::String {
+                description: Some("Org id returned by org_create.".to_string()),
+            },
+        ),
+        (
+            "to_thread_id".to_string(),
+            JsonSchema::String {
+                description: Some("Target principal thread id in the org.".to_string()),
+            },
+        ),
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Legacy plain-text message to send. Use either message or items.".to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "org_principal_message".to_string(),
+        description: "Send a principal-to-principal message within an org (experimental)."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["org_id".to_string(), "to_thread_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_team_message_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2877,11 +2994,19 @@ pub(crate) fn build_specs(
         builder.push_spec_with_parallel_support(create_team_update_config_tool(), true);
         builder.push_spec_with_parallel_support(create_org_create_tool(), true);
         builder.push_spec_with_parallel_support(create_org_register_team_tool(), true);
+        builder.push_spec_with_parallel_support(create_org_info_tool(), true);
+        builder.push_spec_with_parallel_support(create_org_inbox_pop_tool(), true);
+        builder.push_spec_with_parallel_support(create_org_inbox_ack_tool(), true);
+        builder.push_spec_with_parallel_support(create_org_principal_message_tool(), true);
         builder.register_handler("team_current", multi_agent_handler.clone());
         builder.register_handler("team_info", multi_agent_handler.clone());
         builder.register_handler("team_update_config", multi_agent_handler.clone());
         builder.register_handler("org_create", multi_agent_handler.clone());
-        builder.register_handler("org_register_team", multi_agent_handler);
+        builder.register_handler("org_register_team", multi_agent_handler.clone());
+        builder.register_handler("org_info", multi_agent_handler.clone());
+        builder.register_handler("org_inbox_pop", multi_agent_handler.clone());
+        builder.register_handler("org_inbox_ack", multi_agent_handler.clone());
+        builder.register_handler("org_principal_message", multi_agent_handler);
     }
 
     if config.agent_jobs_tools || config.agent_jobs_worker_tools {

@@ -109,6 +109,7 @@ pub async fn handle(
                 .map_err(|err| org_persistence_error("create org inbox directory", &org_id, err))?;
 
             let events_path = org_events_path(codex_home, &org_id);
+            let _events_lock = lock_org_events(codex_home, &org_id).await?;
             let sequence = next_jsonl_sequence(&events_path)
                 .await
                 .map_err(|err| org_persistence_error("compute org event sequence", &org_id, err))?;

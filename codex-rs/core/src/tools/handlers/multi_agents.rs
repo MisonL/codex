@@ -329,6 +329,87 @@ enum CallerTeamRole {
     Member,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallerOrgRole {
+    President,
+    Owner,
+    Leader,
+}
+
+impl CallerOrgRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            CallerOrgRole::President => "president",
+            CallerOrgRole::Owner => "owner",
+            CallerOrgRole::Leader => "leader",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrgPrincipal {
+    role: CallerOrgRole,
+    team_id: Option<String>,
+}
+
+async fn persisted_org_principal(
+    codex_home: &Path,
+    org_id: &str,
+    config: &PersistedOrgConfig,
+    caller_thread_id: ThreadId,
+) -> Result<Option<OrgPrincipal>, FunctionCallError> {
+    let caller_thread_id = caller_thread_id.to_string();
+    if config.president_thread_id == caller_thread_id {
+        return Ok(Some(OrgPrincipal {
+            role: CallerOrgRole::President,
+            team_id: None,
+        }));
+    }
+
+    for team_ref in &config.teams {
+        let team_config = read_persisted_team_config(codex_home, &team_ref.team_id).await?;
+        if team_config.org_id.as_deref() != Some(org_id) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "org `{org_id}` references team `{}` but team config does not match",
+                team_ref.team_id
+            )));
+        }
+        if team_config.lead_thread_id == caller_thread_id {
+            return Ok(Some(OrgPrincipal {
+                role: CallerOrgRole::Owner,
+                team_id: Some(team_ref.team_id.clone()),
+            }));
+        }
+        if team_config
+            .leaders
+            .iter()
+            .any(|leader_thread_id| leader_thread_id == &caller_thread_id)
+        {
+            return Ok(Some(OrgPrincipal {
+                role: CallerOrgRole::Leader,
+                team_id: Some(team_ref.team_id.clone()),
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn assert_persisted_org_principal(
+    codex_home: &Path,
+    org_id: &str,
+    config: &PersistedOrgConfig,
+    caller_thread_id: ThreadId,
+) -> Result<OrgPrincipal, FunctionCallError> {
+    persisted_org_principal(codex_home, org_id, config, caller_thread_id)
+        .await?
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "thread `{caller_thread_id}` is not a principal of org `{org_id}`"
+            ))
+        })
+}
+
 impl CallerTeamRole {
     fn as_str(self) -> &'static str {
         match self {
@@ -573,6 +654,40 @@ fn team_events_path(codex_home: &Path, team_id: &str) -> PathBuf {
 
 fn org_events_path(codex_home: &Path, org_id: &str) -> PathBuf {
     org_dir(codex_home, org_id).join("events.jsonl")
+}
+
+fn team_events_lock_path(codex_home: &Path, team_id: &str) -> PathBuf {
+    team_dir(codex_home, team_id).join("events.lock")
+}
+
+fn org_events_lock_path(codex_home: &Path, org_id: &str) -> PathBuf {
+    org_dir(codex_home, org_id).join("events.lock")
+}
+
+async fn lock_team_events(
+    codex_home: &Path,
+    team_id: &str,
+) -> Result<locks::FileLockGuard, FunctionCallError> {
+    let dir = team_dir(codex_home, team_id);
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|err| team_persistence_error("create team directory", team_id, err))?;
+    locks::lock_file_exclusive(&team_events_lock_path(codex_home, team_id))
+        .await
+        .map_err(|err| team_persistence_error("lock team events", team_id, err))
+}
+
+async fn lock_org_events(
+    codex_home: &Path,
+    org_id: &str,
+) -> Result<locks::FileLockGuard, FunctionCallError> {
+    let dir = org_dir(codex_home, org_id);
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|err| org_persistence_error("create org directory", org_id, err))?;
+    locks::lock_file_exclusive(&org_events_lock_path(codex_home, org_id))
+        .await
+        .map_err(|err| org_persistence_error("lock org events", org_id, err))
 }
 
 async fn next_jsonl_sequence(path: &Path) -> Result<u64, std::io::Error> {
@@ -989,6 +1104,12 @@ impl ToolHandler for MultiAgentHandler {
             "org_register_team" => {
                 org_register_team::handle(session, turn, call_id, arguments).await
             }
+            "org_info" => org_info::handle(session, turn, call_id, arguments).await,
+            "org_inbox_pop" => org_inbox_pop::handle(session, turn, call_id, arguments).await,
+            "org_inbox_ack" => org_inbox_ack::handle(session, turn, call_id, arguments).await,
+            "org_principal_message" => {
+                org_principal_message::handle(session, turn, call_id, arguments).await
+            }
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -999,6 +1120,8 @@ impl ToolHandler for MultiAgentHandler {
 mod locks;
 
 mod inbox;
+
+mod org_inbox;
 
 mod team_ask_lead;
 
@@ -1023,6 +1146,14 @@ mod team_update_config;
 mod org_create;
 
 mod org_register_team;
+
+mod org_info;
+
+mod org_inbox_pop;
+
+mod org_inbox_ack;
+
+mod org_principal_message;
 
 #[derive(Debug)]
 struct WaitForAgentsResult {
