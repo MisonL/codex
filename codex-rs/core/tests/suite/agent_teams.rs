@@ -983,6 +983,490 @@ async fn agent_org_org_register_team_attaches_team_and_updates_configs() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_org_org_info_reports_teams_and_principals() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable Collab");
+        config
+            .features
+            .enable(Feature::AgentOrg)
+            .expect("enable AgentOrg");
+    });
+    let test = builder.build(&server).await?;
+
+    let team_id = "e2e-team-org-info";
+    let spawn_call_id = "call-org-info-spawn-team";
+    let spawn_args = json!({
+        "team_id": team_id,
+        "members": [
+            {"name": "worker", "task": "Reply with ok.", "agent_type": "develop"}
+        ]
+    })
+    .to_string();
+    let spawn_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-info-spawn-1"),
+                ev_function_call(spawn_call_id, "spawn_team", &spawn_args),
+                ev_completed("resp-org-info-spawn-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-info-spawn-1", "spawned"),
+                ev_completed("resp-org-info-spawn-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("spawn team").await?;
+
+    let spawn_output = tool_output_json(&spawn_mock, spawn_call_id).await?;
+    assert_eq!(spawn_output["team_id"].as_str(), Some(team_id));
+    let worker_thread_id = spawn_output["members"][0]["agent_id"]
+        .as_str()
+        .context("worker agent_id missing")?
+        .to_string();
+
+    let set_leaders_call_id = "call-org-info-team-update-config";
+    let set_leaders_args = json!({
+        "team_id": team_id,
+        "leader_names": ["worker"]
+    })
+    .to_string();
+    let set_leaders_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-info-update-1"),
+                ev_function_call(set_leaders_call_id, "team_update_config", &set_leaders_args),
+                ev_completed("resp-org-info-update-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-info-update-1", "updated"),
+                ev_completed("resp-org-info-update-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("set leaders").await?;
+
+    let set_leaders_output = tool_output_json(&set_leaders_mock, set_leaders_call_id).await?;
+    assert_eq!(set_leaders_output["team_id"].as_str(), Some(team_id));
+
+    let org_id = "e2e-org-info";
+    let create_call_id = "call-org-info-org-create";
+    let create_args = json!({ "org_id": org_id }).to_string();
+    let create_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-info-create-1"),
+                ev_function_call(create_call_id, "org_create", &create_args),
+                ev_completed("resp-org-info-create-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-info-create-1", "created"),
+                ev_completed("resp-org-info-create-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("create org").await?;
+
+    let create_output = tool_output_json(&create_mock, create_call_id).await?;
+    assert_eq!(create_output["org_id"].as_str(), Some(org_id));
+
+    let register_call_id = "call-org-info-register-team";
+    let register_args = json!({
+        "org_id": org_id,
+        "team_id": team_id
+    })
+    .to_string();
+    let register_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-info-register-1"),
+                ev_function_call(register_call_id, "org_register_team", &register_args),
+                ev_completed("resp-org-info-register-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-info-register-1", "registered"),
+                ev_completed("resp-org-info-register-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("register team").await?;
+
+    let register_output = tool_output_json(&register_mock, register_call_id).await?;
+    assert_eq!(register_output["changed"].as_bool(), Some(true));
+
+    let info_call_id = "call-org-info";
+    let info_args = json!({ "org_id": org_id }).to_string();
+    let info_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-info-1"),
+                ev_function_call(info_call_id, "org_info", &info_args),
+                ev_completed("resp-org-info-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-info-1", "ok"),
+                ev_completed("resp-org-info-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("org info").await?;
+
+    let info_output = tool_output_json(&info_mock, info_call_id).await?;
+    assert_eq!(info_output["org_id"].as_str(), Some(org_id));
+    assert_eq!(info_output["teams"].as_array().map(Vec::len), Some(1));
+    assert_eq!(info_output["teams"][0]["team_id"].as_str(), Some(team_id));
+    assert_eq!(
+        info_output["teams"][0]["owner_thread_id"]
+            .as_str()
+            .map(str::is_empty),
+        Some(false)
+    );
+    assert_eq!(
+        info_output["teams"][0]["leaders"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(info_output["principals"].as_array().map(Vec::len), Some(2));
+    let principals = info_output["principals"]
+        .as_array()
+        .context("principals should be an array")?;
+    let leader = principals
+        .iter()
+        .find(|entry| entry["role"].as_str() == Some("leader"))
+        .context("leader principal missing")?;
+    assert_eq!(
+        leader["thread_id"].as_str(),
+        Some(worker_thread_id.as_str())
+    );
+    assert_eq!(leader["team_id"].as_str(), Some(team_id));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_org_org_principal_message_appends_org_inbox_and_events() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable Collab");
+        config
+            .features
+            .enable(Feature::AgentOrg)
+            .expect("enable AgentOrg");
+    });
+    let test = builder.build(&server).await?;
+
+    let president_thread_id = test.session_configured.session_id.to_string();
+    let org_id = "e2e-org-principal-message";
+    let team_id = "e2e-team-principal-message";
+
+    let org_message_call_id = "call-org-principal-message";
+    let org_message_args = json!({
+        "org_id": org_id,
+        "to_thread_id": president_thread_id,
+        "message": "ping"
+    })
+    .to_string();
+    let subagent_mock = mount_sse_sequence_match(
+        &server,
+        is_subagent_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-subagent-idle-1"),
+                ev_assistant_message("msg-org-subagent-idle-1", "ready"),
+                ev_completed("resp-org-subagent-idle-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-org-subagent-msg-1"),
+                ev_function_call(
+                    org_message_call_id,
+                    "org_principal_message",
+                    &org_message_args,
+                ),
+                ev_completed("resp-org-subagent-msg-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-subagent-msg-2", "sent"),
+                ev_completed("resp-org-subagent-msg-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let spawn_call_id = "call-org-principal-spawn-team";
+    let spawn_args = json!({
+        "team_id": team_id,
+        "members": [
+            {"name": "lead-a", "task": "Wait for instructions.", "agent_type": "develop"}
+        ]
+    })
+    .to_string();
+    let spawn_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-spawn-1"),
+                ev_function_call(spawn_call_id, "spawn_team", &spawn_args),
+                ev_completed("resp-org-principal-spawn-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-spawn-1", "spawned"),
+                ev_completed("resp-org-principal-spawn-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("spawn team").await?;
+
+    let spawn_output = tool_output_json(&spawn_mock, spawn_call_id).await?;
+    let lead_a_thread_id = spawn_output["members"][0]["agent_id"]
+        .as_str()
+        .context("lead-a agent_id missing")?
+        .to_string();
+
+    let set_leaders_call_id = "call-org-principal-team-update-config";
+    let set_leaders_args = json!({
+        "team_id": team_id,
+        "leader_names": ["lead-a"]
+    })
+    .to_string();
+    let set_leaders_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-update-1"),
+                ev_function_call(set_leaders_call_id, "team_update_config", &set_leaders_args),
+                ev_completed("resp-org-principal-update-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-update-1", "updated"),
+                ev_completed("resp-org-principal-update-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("set leaders").await?;
+
+    let set_leaders_output = tool_output_json(&set_leaders_mock, set_leaders_call_id).await?;
+    assert_eq!(set_leaders_output["team_id"].as_str(), Some(team_id));
+
+    let create_call_id = "call-org-principal-org-create";
+    let create_args = json!({ "org_id": org_id }).to_string();
+    let create_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-create-1"),
+                ev_function_call(create_call_id, "org_create", &create_args),
+                ev_completed("resp-org-principal-create-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-create-1", "created"),
+                ev_completed("resp-org-principal-create-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("create org").await?;
+
+    let create_output = tool_output_json(&create_mock, create_call_id).await?;
+    assert_eq!(create_output["org_id"].as_str(), Some(org_id));
+
+    let register_call_id = "call-org-principal-register-team";
+    let register_args = json!({
+        "org_id": org_id,
+        "team_id": team_id
+    })
+    .to_string();
+    let register_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-register-1"),
+                ev_function_call(register_call_id, "org_register_team", &register_args),
+                ev_completed("resp-org-principal-register-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-register-1", "registered"),
+                ev_completed("resp-org-principal-register-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("register team").await?;
+
+    let register_output = tool_output_json(&register_mock, register_call_id).await?;
+    assert_eq!(register_output["changed"].as_bool(), Some(true));
+
+    let message_leader_call_id = "call-org-principal-team-message";
+    let message_leader_args = json!({
+        "team_id": team_id,
+        "member_name": "lead-a",
+        "message": "Send org_principal_message to president."
+    })
+    .to_string();
+    let message_leader_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-team-message-1"),
+                ev_function_call(message_leader_call_id, "team_message", &message_leader_args),
+                ev_completed("resp-org-principal-team-message-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-team-message-1", "sent"),
+                ev_completed("resp-org-principal-team-message-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("tell leader to send org message").await?;
+
+    let message_leader_output =
+        tool_output_json(&message_leader_mock, message_leader_call_id).await?;
+    assert_eq!(message_leader_output["delivered"].as_bool(), Some(true));
+
+    let org_message_output = tool_output_json(&subagent_mock, org_message_call_id).await?;
+    assert_eq!(org_message_output["org_id"].as_str(), Some(org_id));
+    assert_eq!(
+        org_message_output["from_thread_id"].as_str(),
+        Some(lead_a_thread_id.as_str())
+    );
+    assert_eq!(org_message_output["from_role"].as_str(), Some("leader"));
+    assert_eq!(org_message_output["from_team_id"].as_str(), Some(team_id));
+    assert_eq!(org_message_output["to_role"].as_str(), Some("president"));
+    assert_eq!(org_message_output["delivered_live"].as_bool(), Some(false));
+    assert_eq!(
+        org_message_output["suppressed_reason"].as_str(),
+        Some("durable_only")
+    );
+
+    let pop_call_id = "call-org-principal-org-inbox-pop";
+    let pop_args = json!({ "org_id": org_id }).to_string();
+    let pop_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-pop-1"),
+                ev_function_call(pop_call_id, "org_inbox_pop", &pop_args),
+                ev_completed("resp-org-principal-pop-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-pop-1", "popped"),
+                ev_completed("resp-org-principal-pop-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("pop org inbox").await?;
+
+    let pop_output = tool_output_json(&pop_mock, pop_call_id).await?;
+    assert_eq!(pop_output["org_id"].as_str(), Some(org_id));
+    assert_eq!(pop_output["role"].as_str(), Some("president"));
+    assert_eq!(pop_output["messages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        pop_output["messages"][0]["from_thread_id"].as_str(),
+        Some(lead_a_thread_id.as_str())
+    );
+    assert_eq!(
+        pop_output["messages"][0]["from_team_id"].as_str(),
+        Some(team_id)
+    );
+    assert_eq!(
+        pop_output["messages"][0]["from_role"].as_str(),
+        Some("leader")
+    );
+    let ack_token = pop_output["ack_token"]
+        .as_str()
+        .context("ack_token missing")?
+        .to_string();
+    assert_eq!(ack_token.trim().is_empty(), false);
+
+    let ack_call_id = "call-org-principal-org-inbox-ack";
+    let ack_args = json!({
+        "org_id": org_id,
+        "ack_token": ack_token
+    })
+    .to_string();
+    let ack_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-org-principal-ack-1"),
+                ev_function_call(ack_call_id, "org_inbox_ack", &ack_args),
+                ev_completed("resp-org-principal-ack-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-org-principal-ack-1", "acked"),
+                ev_completed("resp-org-principal-ack-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("ack org inbox").await?;
+
+    let ack_output = tool_output_json(&ack_mock, ack_call_id).await?;
+    assert_eq!(ack_output["acked"].as_bool(), Some(true));
+
+    let org_events_path = test
+        .codex_home_path()
+        .join("orgs")
+        .join(org_id)
+        .join("events.jsonl");
+    let raw_org_events = std::fs::read_to_string(org_events_path)?;
+    let kinds = raw_org_events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            event
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            "org.created".to_string(),
+            "org.team.registered".to_string(),
+            "org.principal.message.appended".to_string()
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_team_worktree_members_create_and_cleanup() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
