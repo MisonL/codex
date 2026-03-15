@@ -1467,6 +1467,150 @@ async fn agent_org_org_principal_message_appends_org_inbox_and_events() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_org_generic_collab_tools_reject_governed_targets() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable Collab");
+        config
+            .features
+            .enable(Feature::AgentOrg)
+            .expect("enable AgentOrg");
+    });
+    let test = builder.build(&server).await?;
+
+    let team_id = "e2e-team-generic-hardening";
+    let spawn_call_id = "call-generic-hardening-spawn-team";
+    let spawn_args = json!({
+        "team_id": team_id,
+        "members": [
+            {"name": "worker", "task": "Wait for instructions.", "agent_type": "develop"}
+        ]
+    })
+    .to_string();
+    let spawn_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-generic-hardening-spawn-1"),
+                ev_function_call(spawn_call_id, "spawn_team", &spawn_args),
+                ev_completed("resp-generic-hardening-spawn-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-generic-hardening-spawn-1", "spawned"),
+                ev_completed("resp-generic-hardening-spawn-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("spawn team").await?;
+
+    let spawn_output = tool_output_json(&spawn_mock, spawn_call_id).await?;
+    let worker_thread_id = spawn_output["members"][0]["agent_id"]
+        .as_str()
+        .context("worker agent_id missing")?
+        .to_string();
+
+    let send_input_call_id = "call-generic-hardening-send-input";
+    let send_input_args = json!({
+        "id": worker_thread_id,
+        "message": "bypass"
+    })
+    .to_string();
+    let send_input_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-generic-hardening-send-input-1"),
+                ev_function_call(send_input_call_id, "send_input", &send_input_args),
+                ev_completed("resp-generic-hardening-send-input-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-generic-hardening-send-input-1", "blocked"),
+                ev_completed("resp-generic-hardening-send-input-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("direct send_input should fail").await?;
+
+    let send_input_error = send_input_mock
+        .function_call_output_text(send_input_call_id)
+        .context("send_input failure output missing")?;
+    assert!(
+        send_input_error.contains("`send_input` cannot target governed thread")
+            && send_input_error.contains(team_id),
+        "unexpected send_input error: {send_input_error}"
+    );
+
+    let close_call_id = "call-generic-hardening-close-agent";
+    let close_args = json!({ "id": worker_thread_id }).to_string();
+    let close_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-generic-hardening-close-1"),
+                ev_function_call(close_call_id, "close_agent", &close_args),
+                ev_completed("resp-generic-hardening-close-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-generic-hardening-close-1", "blocked"),
+                ev_completed("resp-generic-hardening-close-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("direct close_agent should fail").await?;
+
+    let close_error = close_mock
+        .function_call_output_text(close_call_id)
+        .context("close_agent failure output missing")?;
+    assert!(
+        close_error.contains("`close_agent` cannot target governed thread")
+            && close_error.contains(team_id),
+        "unexpected close_agent error: {close_error}"
+    );
+
+    let resume_call_id = "call-generic-hardening-resume-agent";
+    let resume_args = json!({ "id": worker_thread_id }).to_string();
+    let resume_mock = mount_sse_sequence_match(
+        &server,
+        is_lead_request,
+        vec![
+            sse(vec![
+                ev_response_created("resp-generic-hardening-resume-1"),
+                ev_function_call(resume_call_id, "resume_agent", &resume_args),
+                ev_completed("resp-generic-hardening-resume-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-generic-hardening-resume-1", "blocked"),
+                ev_completed("resp-generic-hardening-resume-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("direct resume_agent should fail").await?;
+
+    let resume_error = resume_mock
+        .function_call_output_text(resume_call_id)
+        .context("resume_agent failure output missing")?;
+    assert!(
+        resume_error.contains("`resume_agent` cannot target governed thread")
+            && resume_error.contains(team_id),
+        "unexpected resume_agent error: {resume_error}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_team_worktree_members_create_and_cleanup() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
