@@ -469,6 +469,39 @@ async fn list_persisted_team_ids(codex_home: &Path) -> Result<Vec<String>, Funct
     Ok(team_ids)
 }
 
+async fn list_persisted_org_ids(codex_home: &Path) -> Result<Vec<String>, FunctionCallError> {
+    let orgs_root = codex_home.join(ORG_CONFIG_DIR);
+    let mut dir = match tokio::fs::read_dir(&orgs_root).await {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "failed to read orgs directory: {err}"
+            )));
+        }
+    };
+
+    let mut org_ids = Vec::new();
+    while let Some(entry) = dir
+        .next_entry()
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format!("failed to list orgs: {err}")))?
+    {
+        let file_type = entry.file_type().await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to inspect orgs directory: {err}"))
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        if let Some(org_id) = entry.file_name().to_str() {
+            org_ids.push(org_id.to_string());
+        }
+    }
+
+    org_ids.sort();
+    Ok(org_ids)
+}
+
 async fn find_persisted_team_for_thread(
     codex_home: &Path,
     caller_thread_id: ThreadId,
@@ -492,6 +525,34 @@ async fn find_persisted_team_for_thread(
             matches
                 .into_iter()
                 .map(|(team_id, _, _)| team_id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+async fn find_persisted_org_for_thread(
+    codex_home: &Path,
+    caller_thread_id: ThreadId,
+) -> Result<Option<(String, PersistedOrgConfig, OrgPrincipal)>, FunctionCallError> {
+    let mut matches = Vec::new();
+    for org_id in list_persisted_org_ids(codex_home).await? {
+        let config = read_persisted_org_config(codex_home, &org_id).await?;
+        if let Some(principal) =
+            persisted_org_principal(codex_home, &org_id, &config, caller_thread_id).await?
+        {
+            matches.push((org_id, config, principal));
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "thread `{caller_thread_id}` belongs to multiple orgs: {}",
+            matches
+                .into_iter()
+                .map(|(org_id, _, _)| org_id)
                 .collect::<Vec<_>>()
                 .join(", ")
         ))),
@@ -861,6 +922,36 @@ fn find_team_member(
                 "member `{member_name}` not found in team `{team_id}`"
             ))
         })
+}
+
+async fn reject_generic_tool_for_governed_target(
+    codex_home: &Path,
+    tool_name: &str,
+    target_thread_id: ThreadId,
+) -> Result<(), FunctionCallError> {
+    if let Some((team_id, team_config, target_role)) =
+        find_persisted_team_for_thread(codex_home, target_thread_id).await?
+    {
+        let org_suffix = team_config
+            .org_id
+            .as_ref()
+            .map_or(String::new(), |org_id| format!(" in org `{org_id}`"));
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{tool_name}` cannot target governed thread `{target_thread_id}` (team `{team_id}`{org_suffix}, role `{}`). Use `team_message`, `team_ask_lead`, `org_principal_message`, or other scoped team/org tools instead.",
+            target_role.as_str()
+        )));
+    }
+
+    if let Some((org_id, _, principal)) =
+        find_persisted_org_for_thread(codex_home, target_thread_id).await?
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{tool_name}` cannot target governed principal `{target_thread_id}` in org `{org_id}` (role `{}`). Use `org_principal_message` or org-scoped control tools instead.",
+            principal.role.as_str()
+        )));
+    }
+
+    Ok(())
 }
 
 async fn read_team_tasks(
@@ -2101,6 +2192,14 @@ pub mod close_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
+        if turn.config.features.enabled(Feature::AgentOrg) {
+            reject_generic_tool_for_governed_target(
+                turn.config.codex_home.as_path(),
+                "close_agent",
+                agent_id,
+            )
+            .await?;
+        }
         session
             .send_event(
                 &turn,

@@ -23,6 +23,14 @@ pub async fn handle(
 ) -> Result<ToolOutput, FunctionCallError> {
     let args: SendInputArgs = parse_arguments(&arguments)?;
     let receiver_thread_id = agent_id(&args.id)?;
+    if turn.config.features.enabled(Feature::AgentOrg) {
+        reject_generic_tool_for_governed_target(
+            turn.config.codex_home.as_path(),
+            "send_input",
+            receiver_thread_id,
+        )
+        .await?;
+    }
     let input_items = parse_collab_input(args.message, args.items)?;
     let prompt = input_preview(&input_items);
     let submission_id = send_input_to_member(

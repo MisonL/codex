@@ -20,6 +20,14 @@ pub async fn handle(
 ) -> Result<ToolOutput, FunctionCallError> {
     let args: ResumeAgentArgs = parse_arguments(&arguments)?;
     let receiver_thread_id = agent_id(&args.id)?;
+    if turn.config.features.enabled(Feature::AgentOrg) {
+        reject_generic_tool_for_governed_target(
+            turn.config.codex_home.as_path(),
+            "resume_agent",
+            receiver_thread_id,
+        )
+        .await?;
+    }
     let child_depth = next_thread_spawn_depth(&turn.session_source);
     if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
         return Err(FunctionCallError::RespondToModel(
