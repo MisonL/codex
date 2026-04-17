@@ -119,7 +119,15 @@ prefix_rule(
     if ($matchedRules.Count -lt 1) {
       throw "expected at least one matched rule from codex-execpolicy"
     }
-    $matchedPrefix = @($matchedRules[0].matchedPrefix)
+    $firstRule = $matchedRules[0]
+    $matchedPrefix = @()
+    if ($null -ne $firstRule.matchedPrefix) {
+      $matchedPrefix = @($firstRule.matchedPrefix)
+    } elseif ($null -ne $firstRule.prefixRuleMatch -and $null -ne $firstRule.prefixRuleMatch.matchedPrefix) {
+      $matchedPrefix = @($firstRule.prefixRuleMatch.matchedPrefix)
+    } elseif ($null -ne $firstRule.PrefixRuleMatch -and $null -ne $firstRule.PrefixRuleMatch.matchedPrefix) {
+      $matchedPrefix = @($firstRule.PrefixRuleMatch.matchedPrefix)
+    }
     if ($matchedPrefix.Count -ne 2 -or $matchedPrefix[0] -ne 'git' -or $matchedPrefix[1] -ne 'push') {
       throw "expected matched prefix in codex-execpolicy output"
     }
