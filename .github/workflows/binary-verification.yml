@@ -41,6 +41,68 @@ jobs:
         shell: powershell
         run: .github\scripts\binary-smoke-windows.ps1
 
+  rust-binary-integration-unix:
+    name: Rust binary integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux integration dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends zsh
+      - uses: dtolnay/rust-toolchain@1.93.0
+      - name: Run targeted binary integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo test -p codex-cli --test features --test mcp_list --test mcp_add_remove --test execpolicy
+          cargo test -p codex-mcp-server --test all test_patch_approval_triggers_elicitation
+          cargo test -p codex-app-server --test all list_apps_returns_empty_when_connectors_disabled
+          cargo test -p codex-exec --test all exits_non_zero_when_server_reports_error
+
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            cargo test -p codex-linux-sandbox --test all managed_proxy_mode_fails_closed_without_proxy_env
+            cargo build -p codex-shell-escalation --bin codex-execve-wrapper
+            cargo test -p codex-core --test all matched_prefix_rule_runs_unsandboxed_under_zsh_fork
+          fi
+
+  rust-binary-integration-windows:
+    name: Rust binary integration (windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.93.0
+      - name: Run targeted binary integration tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          cargo test -p codex-cli --test features --test mcp_list --test mcp_add_remove --test execpolicy
+          cargo test -p codex-mcp-server --test all test_patch_approval_triggers_elicitation
+          cargo test -p codex-app-server --test all windows_sandbox_setup_start_emits_completion_notification
+
+      - name: Run Windows sandbox smoke suite
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python windows-sandbox-rs/sandbox_smoketests.py
+
   installer-smoke:
     name: installer-smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
