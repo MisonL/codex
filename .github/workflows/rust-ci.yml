@@ -102,6 +102,11 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
+      # The Linux tests job has repeatedly failed after nextest completes because
+      # actions/cache/save for the local sccache directory aborts the job on the
+      # hosted runner. Keep restore + stats, but skip the post-test save here so
+      # verification reflects the test result rather than cache packaging.
+      SAVE_SCCACHE_FALLBACK: "false"
       MATRIX_VARIANT: ${{ matrix.asset_suffix || 'default' }}
       # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
       CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile == 'release' && 'thin' || 'fat' }}
@@ -354,7 +359,7 @@ jobs:
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ env.MATRIX_VARIANT }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
 
       - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
+        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' && env.SAVE_SCCACHE_FALLBACK != 'false'
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
