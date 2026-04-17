@@ -80,11 +80,17 @@ function Invoke-FileSearchSmoke {
   $binaryPath = Join-Path (Join-Path $PWD 'target\debug') 'codex-file-search.exe'
   try {
     Write-Host "==> codex-file-search.exe --json -C <dir> alpha --exclude target/**"
-    $output = & $binaryPath --json -C $tempRoot alpha --exclude 'target/**' | Out-String
-    if ($output -notlike '*"path":"src/alpha_result.txt"*') {
+    $output = & $binaryPath --json -C $tempRoot alpha --exclude 'target/**'
+    $matches = @(
+      $output |
+        Where-Object { $_ -and $_.Trim().Length -gt 0 } |
+        ForEach-Object { $_ | ConvertFrom-Json }
+    )
+    $normalizedPaths = @($matches | ForEach-Object { $_.path -replace '\\', '/' })
+    if ($normalizedPaths -notcontains 'src/alpha_result.txt') {
       throw "expected src/alpha_result.txt in file search output"
     }
-    if ($output -like '*"path":"target/alpha_ignored.txt"*') {
+    if ($normalizedPaths -contains 'target/alpha_ignored.txt') {
       throw "excluded file appeared in file search output"
     }
   } finally {
