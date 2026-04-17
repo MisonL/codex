@@ -139,7 +139,8 @@ prefix_rule(
 function Invoke-ExecPolicyLegacySmoke {
   $binaryPath = Join-Path (Join-Path $PWD 'target\debug') 'codex-execpolicy-legacy.exe'
   Write-Host "==> codex-execpolicy-legacy.exe check-json"
-  $output = & $binaryPath check-json '{"program":"pwd","args":[]}' | Out-String
+  $execJson = "{`"program`":`"pwd`",`"args`":[]}"
+  $output = & $binaryPath check-json $execJson | Out-String
   if ($output -notlike '*"result":"safe"*') {
     throw "expected safe result from codex-execpolicy-legacy"
   }
