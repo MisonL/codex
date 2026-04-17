@@ -89,6 +89,35 @@ server.close()
   }
 }
 
+function Invoke-ApplyPatchSmoke {
+  $tempRoot = Join-Path $env:RUNNER_TEMP ("apply-patch-" + [System.Guid]::NewGuid().ToString())
+  $applyPatchBinary = Join-Path (Join-Path $PWD 'target\debug') 'apply_patch.exe'
+  $patch = @'
+*** Begin Patch
+*** Add File: smoke.txt
++hello
+*** End Patch
+'@
+  New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+  try {
+    Write-Host "==> apply_patch.exe <patch>"
+    Push-Location $tempRoot
+    & $applyPatchBinary $patch *> $null
+    Pop-Location
+
+    $smokeFile = Join-Path $tempRoot 'smoke.txt'
+    if ((Get-Content $smokeFile -Raw).Trim() -ne 'hello') {
+      throw 'apply_patch did not write expected content'
+    }
+  } finally {
+    if ((Get-Location).Path -eq $tempRoot) {
+      Pop-Location
+    }
+    if (Test-Path $tempRoot) { Remove-Item -Recurse -Force $tempRoot }
+  }
+}
+
 Invoke-BinaryHelp 'codex.exe'
 Invoke-BinaryHelp 'codex-app-server.exe'
 Invoke-BinaryHelp 'codex-mcp-server.exe'
@@ -98,7 +127,7 @@ Invoke-BinaryHelp 'codex-execpolicy-legacy.exe'
 Invoke-StdioToUdsSmoke
 Invoke-BinaryHelp 'codex-responses-api-proxy.exe'
 Invoke-BinaryHelp 'codex-tui.exe'
-Invoke-BinaryHelp 'apply_patch.exe'
+Invoke-ApplyPatchSmoke
 
 foreach ($binary in @('codex-windows-sandbox-setup.exe', 'codex-command-runner.exe')) {
   $binaryPath = Join-Path (Join-Path $PWD 'target\debug') $binary

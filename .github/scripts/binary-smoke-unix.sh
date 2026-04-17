@@ -78,6 +78,27 @@ PY
   rm -rf "$tmp_dir"
 }
 
+run_apply_patch_smoke() {
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local patch
+  patch="$(cat <<'PATCH'
+*** Begin Patch
+*** Add File: smoke.txt
++hello
+*** End Patch
+PATCH
+)"
+
+  echo "==> apply_patch <patch>"
+  (
+    cd "$tmp_dir"
+    "${repo_root}/codex-rs/target/debug/apply_patch" "$patch" >/dev/null
+  )
+  grep -Fx "hello" "${tmp_dir}/smoke.txt" >/dev/null
+  rm -rf "$tmp_dir"
+}
+
 run_help codex --help
 run_help codex-app-server --help
 run_help codex-mcp-server --help
@@ -88,7 +109,7 @@ run_help codex-execpolicy-legacy --help
 run_stdio_to_uds_smoke
 run_help codex-responses-api-proxy --help
 run_help codex-tui --help
-run_help apply_patch --help
+run_apply_patch_smoke
 
 if [[ -x target/debug/codex-linux-sandbox ]]; then
   run_help codex-linux-sandbox --help
