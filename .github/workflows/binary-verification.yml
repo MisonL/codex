@@ -105,6 +105,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
           Set-Content -LiteralPath (Join-Path $codexHome 'config.toml') -Value "[windows]`nsandbox = 'elevated'`n" -Encoding ASCII
 
+      - name: Build Windows sandbox helpers for smoke suite
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build -p codex-windows-sandbox --bin codex-windows-sandbox-setup --bin codex-command-runner
+
       - name: Run Windows sandbox smoke suite
         shell: powershell
         run: |
