@@ -138,11 +138,31 @@ prefix_rule(
 
 function Invoke-ExecPolicyLegacySmoke {
   $binaryPath = Join-Path (Join-Path $PWD 'target\debug') 'codex-execpolicy-legacy.exe'
-  Write-Host "==> codex-execpolicy-legacy.exe check-json"
-  $execJson = "{`"program`":`"pwd`",`"args`":[]}"
-  $output = & $binaryPath check-json $execJson | Out-String
-  if ($output -notlike '*"result":"safe"*') {
-    throw "expected safe result from codex-execpolicy-legacy"
+  $tempRoot = Join-Path $env:RUNNER_TEMP ("execpolicy-legacy-" + [System.Guid]::NewGuid().ToString())
+  $stdoutPath = Join-Path $tempRoot 'stdout.txt'
+  $stderrPath = Join-Path $tempRoot 'stderr.txt'
+  New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+  try {
+    Write-Host "==> codex-execpolicy-legacy.exe check-json"
+    $execJson = '{"program":"pwd","args":[]}'
+    $process = Start-Process `
+      -FilePath $binaryPath `
+      -ArgumentList @('check-json', $execJson) `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath `
+      -NoNewWindow `
+      -Wait `
+      -PassThru
+    if ($process.ExitCode -ne 0) {
+      $stderr = if (Test-Path $stderrPath) { Get-Content -Path $stderrPath -Raw } else { '' }
+      throw "codex-execpolicy-legacy exited with code $($process.ExitCode): $stderr"
+    }
+    $output = Get-Content -Path $stdoutPath -Raw
+    if ($output -notlike '*"result":"safe"*') {
+      throw "expected safe result from codex-execpolicy-legacy"
+    }
+  } finally {
+    if (Test-Path $tempRoot) { Remove-Item -Recurse -Force $tempRoot }
   }
 }
 
