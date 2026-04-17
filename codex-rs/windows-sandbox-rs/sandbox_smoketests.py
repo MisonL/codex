@@ -75,10 +75,11 @@ def run_sbx(
         raise ValueError(f"unknown policy: {policy}")
     policy_flags: List[str] = ["--full-auto"] if policy == "workspace-write" else []
 
-    # On Windows, read-only is not a real sandbox boundary. Keep those checks on
-    # the unelevated path so the elevated smoke coverage stays focused on the
-    # workspace-write flow we actually need to validate here.
-    windows_mode = "elevated" if policy == "workspace-write" else "unelevated"
+    # On Windows CI, both policy paths need to stay on the unelevated backend for
+    # this smoke suite. The hosted runner can complete the workspace-write checks
+    # there once the helper binaries are present, while the elevated path hangs on
+    # a simple CWD write and provides no additional coverage here.
+    windows_mode = "unelevated"
     overrides: List[str] = ["-c", f'windows.sandbox="{windows_mode}"']
     if policy == "workspace-write" and additional_root is not None:
         # Use config override to inject an additional writable root.

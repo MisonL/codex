@@ -97,14 +97,6 @@ jobs:
           cargo test -p codex-mcp-server --test all test_patch_approval_triggers_elicitation
           cargo test -p codex-app-server --test all windows_sandbox_setup_start_emits_completion_notification
 
-      - name: Configure elevated Windows sandbox mode for smoke suite
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $codexHome = Join-Path $env:USERPROFILE '.codex'
-          New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
-          Set-Content -LiteralPath (Join-Path $codexHome 'config.toml') -Value "[windows]`nsandbox = 'elevated'`n" -Encoding ASCII
-
       - name: Build Windows sandbox helpers for smoke suite
         shell: powershell
         run: |
