@@ -678,15 +678,22 @@ mod tests {
         let writable_root_str = path_to_string(writable_root.as_path());
         let blocked_str = path_to_string(blocked.as_path());
 
+        let writable_bind_index = args
+            .args
+            .windows(3)
+            .position(|window| window[0] == "--bind-fd" && window[2] == writable_root_str)
+            .expect("writable root bind");
+        let blocked_mask_index = args
+            .args
+            .windows(4)
+            .position(|window| window == ["--perms", "000", "--tmpfs", blocked_str.as_str()])
+            .expect("blocked directory mask");
+
+        assert!(blocked_mask_index > writable_bind_index);
         assert!(
             args.args
-                .windows(3)
-                .any(|window| { window[0] == "--bind-fd" && window[2] == writable_root_str })
-        );
-        assert!(
-            args.args.windows(3).any(|window| {
-                window == ["--ro-bind", blocked_str.as_str(), blocked_str.as_str()]
-            })
+                .windows(2)
+                .any(|window| window == ["--remount-ro", blocked_str.as_str()])
         );
     }
 
