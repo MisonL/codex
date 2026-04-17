@@ -139,25 +139,29 @@ prefix_rule(
 function Invoke-ExecPolicyLegacySmoke {
   $binaryPath = Join-Path (Join-Path $PWD 'target\debug') 'codex-execpolicy-legacy.exe'
   $tempRoot = Join-Path $env:RUNNER_TEMP ("execpolicy-legacy-" + [System.Guid]::NewGuid().ToString())
-  $stdoutPath = Join-Path $tempRoot 'stdout.txt'
-  $stderrPath = Join-Path $tempRoot 'stderr.txt'
+  $runnerPath = Join-Path $tempRoot 'run_execpolicy_legacy.py'
   New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
   try {
     Write-Host "==> codex-execpolicy-legacy.exe check-json"
-    $execJson = '{"program":"pwd","args":[]}'
-    $process = Start-Process `
-      -FilePath $binaryPath `
-      -ArgumentList @('check-json', $execJson) `
-      -RedirectStandardOutput $stdoutPath `
-      -RedirectStandardError $stderrPath `
-      -NoNewWindow `
-      -Wait `
-      -PassThru
-    if ($process.ExitCode -ne 0) {
-      $stderr = if (Test-Path $stderrPath) { Get-Content -Path $stderrPath -Raw } else { '' }
-      throw "codex-execpolicy-legacy exited with code $($process.ExitCode): $stderr"
+    Set-Content -Path $runnerPath -Value @'
+import subprocess
+import sys
+
+binary_path = sys.argv[1]
+exec_json = '{"program":"pwd","args":[]}'
+result = subprocess.run(
+    [binary_path, "check-json", exec_json],
+    capture_output=True,
+    text=True,
+)
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+sys.exit(result.returncode)
+'@
+    $output = & python $runnerPath $binaryPath 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+      throw "codex-execpolicy-legacy exited with code ${LASTEXITCODE}: $output"
     }
-    $output = Get-Content -Path $stdoutPath -Raw
     if ($output -notlike '*"result":"safe"*') {
       throw "expected safe result from codex-execpolicy-legacy"
     }
