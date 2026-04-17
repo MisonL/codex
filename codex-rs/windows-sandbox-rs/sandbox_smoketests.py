@@ -75,13 +75,17 @@ def run_sbx(
         raise ValueError(f"unknown policy: {policy}")
     policy_flags: List[str] = ["--full-auto"] if policy == "workspace-write" else []
 
-    overrides: List[str] = []
+    # On Windows, read-only is not a real sandbox boundary. Keep those checks on
+    # the unelevated path so the elevated smoke coverage stays focused on the
+    # workspace-write flow we actually need to validate here.
+    windows_mode = "elevated" if policy == "workspace-write" else "unelevated"
+    overrides: List[str] = ["-c", f'windows.sandbox="{windows_mode}"']
     if policy == "workspace-write" and additional_root is not None:
         # Use config override to inject an additional writable root.
-        overrides = [
+        overrides.extend([
             "-c",
             f'sandbox_workspace_write.writable_roots=["{additional_root.as_posix()}"]',
-        ]
+        ])
 
     argv = [*CODEX_CMD, "sandbox", "windows", *policy_flags, *overrides, "--", *cmd_argv]
     print(cmd_argv)
