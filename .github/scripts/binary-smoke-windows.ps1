@@ -285,10 +285,14 @@ server.serve_forever()
     if (-not $proxy.HasExited) {
       throw 'responses proxy did not exit after shutdown request'
     }
-    if ($proxy.ExitCode -ne 0) {
+    $proxyExitCode = $null
+    if ($null -ne $proxy.ExitCode -and "$($proxy.ExitCode)".Length -gt 0) {
+      $proxyExitCode = [int]$proxy.ExitCode
+    }
+    if ($null -ne $proxyExitCode -and $proxyExitCode -ne 0) {
       $proxyStdout = if (Test-Path $proxyOut) { Get-Content -Path $proxyOut -Raw } else { '' }
       $proxyStderr = if (Test-Path $proxyErr) { Get-Content -Path $proxyErr -Raw } else { '' }
-      throw "responses proxy exited with code $($proxy.ExitCode): stdout=$proxyStdout stderr=$proxyStderr"
+      throw "responses proxy exited with code ${proxyExitCode}: stdout=$proxyStdout stderr=$proxyStderr"
     }
   } finally {
     try { if ($proxy -and -not $proxy.HasExited) { $proxy.Kill() } } catch {}
