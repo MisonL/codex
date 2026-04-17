@@ -275,7 +275,21 @@ server.serve_forever()
     }
 
     Invoke-WebRequest -Uri "http://127.0.0.1:$proxyPort/shutdown" -UseBasicParsing | Out-Null
-    Wait-Process -Id $proxy.Id -Timeout 10
+    try {
+      Wait-Process -Id $proxy.Id -Timeout 10 -ErrorAction Stop
+    } catch {
+      if ($_.FullyQualifiedErrorId -ne 'NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.WaitProcessCommand') {
+        throw
+      }
+    }
+    if (-not $proxy.HasExited) {
+      throw 'responses proxy did not exit after shutdown request'
+    }
+    if ($proxy.ExitCode -ne 0) {
+      $proxyStdout = if (Test-Path $proxyOut) { Get-Content -Path $proxyOut -Raw } else { '' }
+      $proxyStderr = if (Test-Path $proxyErr) { Get-Content -Path $proxyErr -Raw } else { '' }
+      throw "responses proxy exited with code $($proxy.ExitCode): stdout=$proxyStdout stderr=$proxyStderr"
+    }
   } finally {
     try { if ($proxy -and -not $proxy.HasExited) { $proxy.Kill() } } catch {}
     try { if ($upstream -and -not $upstream.HasExited) { $upstream.Kill() } } catch {}
