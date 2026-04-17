@@ -111,11 +111,12 @@ prefix_rule(
   try {
     Write-Host "==> codex-execpolicy.exe check"
     $binaryPath = Join-Path (Join-Path $PWD 'target\debug') 'codex-execpolicy.exe'
-    $output = & $binaryPath check --rules $rulesPath git push origin main | Out-String
-    if ($output -notlike '*"decision":"forbidden"*') {
+    $result = (& $binaryPath check --rules $rulesPath git push origin main | Out-String | ConvertFrom-Json)
+    if ($result.decision -ne 'forbidden') {
       throw "expected forbidden decision from codex-execpolicy"
     }
-    if ($output -notlike '*"matchedPrefix":["git","push"]*') {
+    $matchedPrefix = @($result.matchedPrefix)
+    if ($matchedPrefix.Count -ne 2 -or $matchedPrefix[0] -ne 'git' -or $matchedPrefix[1] -ne 'push') {
       throw "expected matched prefix in codex-execpolicy output"
     }
   } finally {
