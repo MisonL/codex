@@ -115,7 +115,11 @@ prefix_rule(
     if ($result.decision -ne 'forbidden') {
       throw "expected forbidden decision from codex-execpolicy"
     }
-    $matchedPrefix = @($result.matchedPrefix)
+    $matchedRules = @($result.matchedRules)
+    if ($matchedRules.Count -lt 1) {
+      throw "expected at least one matched rule from codex-execpolicy"
+    }
+    $matchedPrefix = @($matchedRules[0].matchedPrefix)
     if ($matchedPrefix.Count -ne 2 -or $matchedPrefix[0] -ne 'git' -or $matchedPrefix[1] -ne 'push') {
       throw "expected matched prefix in codex-execpolicy output"
     }
