@@ -28,6 +28,7 @@ fn policy_ctx(
 async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
     let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
         allowed_domains: vec!["example.com".to_string()],
+        allow_local_binding: true,
         ..NetworkProxySettings::default()
     }));
     let ctx = policy_ctx(app_state.clone(), NetworkMode::Limited, "example.com", 443);
@@ -61,6 +62,7 @@ async fn mitm_policy_blocks_disallowed_method_and_records_telemetry() {
 async fn mitm_policy_rejects_host_mismatch() {
     let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
         allowed_domains: vec!["example.com".to_string()],
+        allow_local_binding: true,
         ..NetworkProxySettings::default()
     }));
     let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "example.com", 443);

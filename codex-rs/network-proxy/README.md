@@ -194,7 +194,8 @@ what it can reasonably guarantee.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)
   is required to permit them; hostnames that resolve to local/private IPs are still blocked even if
-  allowlisted (best-effort DNS lookup).
+  allowlisted. DNS lookup failures or timeouts are blocked because a failed precheck cannot prove the
+  destination is public.
 - Limited mode enforcement:
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
   - HTTPS `CONNECT` remains a tunnel; limited-mode method enforcement does not apply to HTTPS
