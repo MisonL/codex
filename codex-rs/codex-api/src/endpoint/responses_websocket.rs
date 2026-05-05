@@ -525,10 +525,15 @@ async fn run_websocket_response_stream(
     trace!("websocket request: {request_text}");
 
     let request_start = Instant::now();
-    let result = ws_stream
-        .send(Message::Text(request_text.into()))
-        .await
-        .map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")));
+    let result = tokio::time::timeout(
+        idle_timeout,
+        ws_stream.send(Message::Text(request_text.into())),
+    )
+    .await
+    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
+    .and_then(|result| {
+        result.map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")))
+    });
 
     if let Some(t) = telemetry.as_ref() {
         t.on_ws_request(request_start.elapsed(), result.as_ref().err());
@@ -630,6 +635,35 @@ mod tests {
     fn websocket_config_enables_permessage_deflate() {
         let config = websocket_config();
         assert!(config.extensions.permessage_deflate.is_some());
+    }
+
+    #[tokio::test]
+    async fn run_websocket_response_stream_times_out_stalled_request_send() {
+        let (tx_command, _rx_command) = mpsc::channel::<WsCommand>(1);
+        let (_tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
+        let mut ws_stream = WsStream {
+            tx_command,
+            rx_message,
+            pump_task: tokio::spawn(std::future::pending()),
+        };
+        let (tx_event, _rx_event) = mpsc::channel(1);
+
+        let err = run_websocket_response_stream(
+            &mut ws_stream,
+            tx_event,
+            json!({"model": "gpt-test", "input": []}),
+            Duration::from_millis(1),
+            None,
+        )
+        .await
+        .expect_err("stalled websocket send should time out");
+
+        match err {
+            ApiError::Stream(message) => {
+                assert_eq!(message, "idle timeout sending websocket request");
+            }
+            other => panic!("expected stream timeout error, got {other:?}"),
+        }
     }
 
     #[test]
