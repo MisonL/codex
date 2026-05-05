@@ -28,6 +28,7 @@ use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
@@ -697,7 +698,7 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     info!(
         issuer = %sanitize_url_for_logging(issuer),
         redirect_uri = %redirect_uri,
@@ -1063,7 +1064,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")

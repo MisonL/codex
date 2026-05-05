@@ -1,3 +1,4 @@
+mod custom_ca;
 mod default_client;
 mod error;
 mod request;
@@ -6,6 +7,10 @@ mod sse;
 mod telemetry;
 mod transport;
 
+pub use crate::custom_ca::CODEX_CA_CERT_ENV;
+pub use crate::custom_ca::SSL_CERT_FILE_ENV;
+pub use crate::custom_ca::build_reqwest_client_for_subprocess_tests;
+pub use crate::custom_ca::build_reqwest_client_with_custom_ca;
 pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
