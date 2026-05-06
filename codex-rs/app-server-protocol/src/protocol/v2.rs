@@ -1603,6 +1603,15 @@ impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
@@ -1618,6 +1627,8 @@ pub struct Model {
     pub input_modalities: Vec<InputModality>,
     #[serde(default)]
     pub supports_personality: bool,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }

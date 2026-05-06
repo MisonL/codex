@@ -333,6 +333,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         priority,
+        service_tiers: Vec::new(),
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

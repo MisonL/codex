@@ -12023,6 +12023,13 @@
           "model": {
             "type": "string"
           },
+          "serviceTiers": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/ModelServiceTier"
+            },
+            "type": "array"
+          },
           "supportedReasoningEfforts": {
             "items": {
               "$ref": "#/definitions/v2/ReasoningEffortOption"
@@ -12159,6 +12166,25 @@
           "turnId"
         ],
         "title": "ModelReroutedNotification",
+        "type": "object"
+      },
+      "ModelServiceTier": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "id",
+          "name"
+        ],
         "type": "object"
       },
       "ModelUpgradeInfo": {

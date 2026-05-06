@@ -13,6 +13,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -288,6 +289,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        service_tiers: Vec::new(),
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,
@@ -531,6 +533,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        service_tiers: Vec::new(),
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,
@@ -682,6 +685,58 @@ async fn remote_models_do_not_append_removed_builtin_presets() -> Result<()> {
         models_mock.requests().len(),
         1,
         "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_preserve_service_tiers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model = ModelInfo {
+        service_tiers: vec![ModelServiceTier {
+            id: "fast".to_string(),
+            name: "Fast".to_string(),
+            description: "Priority processing.".to_string(),
+        }],
+        ..test_remote_model("remote-service-tier", ModelVisibility::List, 0)
+    };
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = codex_core::test_support::models_manager_with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::test_support::auth_manager_from_auth(auth),
+        provider,
+    );
+
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+    let remote = available
+        .iter()
+        .find(|model| model.model == "remote-service-tier")
+        .expect("remote model should be listed");
+
+    assert_eq!(
+        remote.service_tiers,
+        vec![ModelServiceTier {
+            id: "fast".to_string(),
+            name: "Fast".to_string(),
+            description: "Priority processing.".to_string(),
+        }]
     );
 
     Ok(())
@@ -998,6 +1053,7 @@ fn test_remote_model_with_policy(
         shell_type: ConfigShellToolType::ShellCommand,
         visibility,
         supported_in_api: true,
+        service_tiers: Vec::new(),
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,

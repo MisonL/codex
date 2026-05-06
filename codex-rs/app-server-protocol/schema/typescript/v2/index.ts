@@ -151,6 +151,7 @@ export type { ModelListParams } from "./ModelListParams";
 export type { ModelListResponse } from "./ModelListResponse";
 export type { ModelRerouteReason } from "./ModelRerouteReason";
 export type { ModelReroutedNotification } from "./ModelReroutedNotification";
+export type { ModelServiceTier } from "./ModelServiceTier";
 export type { ModelUpgradeInfo } from "./ModelUpgradeInfo";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
