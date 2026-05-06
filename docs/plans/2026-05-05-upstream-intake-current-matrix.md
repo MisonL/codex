@@ -94,7 +94,7 @@ Implication: most useful intake work crosses `codex-rs/core`, `app-server-protoc
 | `5b80f87c97` | linux-sandbox | Fall back when system bwrap lacks permissions | sandbox runtime | High | N/A in current fork: no system bwrap launcher; bwrap path executes vendored bubblewrap directly | `git show 5b80f87c97`; `git ls-tree -r --name-only HEAD \| rg '^codex-rs/linux-sandbox/src/(launcher\|vendored_bwrap\|linux_run_main\|bwrap)\.rs$'`; `rg 'find_system_bwrap\|SystemBwrap\|exec_system_bwrap' codex-rs/linux-sandbox codex-rs`; `cargo test -p codex-linux-sandbox` (macOS cfg-gated 0 tests); `cargo check -p codex-linux-sandbox --target x86_64-unknown-linux-gnu` blocked by missing OpenSSL/pkg-config cross sysroot |
 | `dca105cf99` | hooks/context | Spill large hook outputs from context | hooks context | Medium | P0-direct | hook runtime tests; rollout/context tests |
 | `127434cd8b` | TUI/startup | Bound startup terminal probes | TUI startup | Low | P0-direct | `cargo test -p codex-tui` targeted tests |
-| `2817866a32` | config/core | Reduce `ConfigBuilder::build` stack usage | config builder | Low | P0-direct | `cargo test -p codex-core config` |
+| `2817866a32` | config/core | Reduce `ConfigBuilder::build` stack usage | config builder | Low | P0-direct, implemented 2026-05-06 | `cargo test -p codex-core --lib config`; `cargo check -p codex-core --lib` |
 | `5744b85b9a` | dependency/security | Fix cargo deny | dependency gate | Low | Already covered by current fork commit `0106975ae1` | `cargo deny check`, GitHub `cargo-deny` |
 
 ## P1 Facade Intake Candidates
