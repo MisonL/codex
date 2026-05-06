@@ -42,6 +42,7 @@ pub mod features;
 mod file_watcher;
 mod flags;
 pub mod git_info;
+mod hook_output_spill;
 mod hooks_executor;
 pub mod instructions;
 pub mod landlock;

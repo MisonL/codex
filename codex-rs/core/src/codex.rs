@@ -1218,6 +1218,8 @@ impl Session {
                             }
                         }
                         if !additional_context.is_empty() {
+                            let additional_context =
+                                sess.spill_hook_contexts(additional_context).await;
                             let mut guard = sess.services.pending_hook_context.lock().await;
                             guard.extend(additional_context);
                         }
@@ -1261,7 +1263,7 @@ impl Session {
                     hook_name,
                     result:
                         HookResult {
-                            mut additional_context,
+                            additional_context,
                             error,
                             ..
                         },
@@ -1276,8 +1278,9 @@ impl Session {
                 }
 
                 if !additional_context.is_empty() {
+                    let additional_context = sess.spill_hook_contexts(additional_context).await;
                     let mut guard = sess.services.pending_hook_context.lock().await;
-                    guard.append(&mut additional_context);
+                    guard.extend(additional_context);
                 }
             }
         });
@@ -1942,6 +1945,7 @@ impl Session {
             additional_context.extend(result.additional_context);
         }
         if !additional_context.is_empty() {
+            let additional_context = sess.spill_hook_contexts(additional_context).await;
             let mut guard = sess.services.pending_hook_context.lock().await;
             guard.extend(additional_context);
         }
@@ -2702,14 +2706,26 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        crate::context_manager::updates::build_settings_update_items(
+        let mut items = crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
-        )
+        );
+        if let Some(item) = crate::context_manager::updates::build_developer_update_item(
+            self.take_pending_hook_context().await,
+        ) {
+            let insert_at = items
+                .iter()
+                .position(
+                    |item| matches!(item, ResponseItem::Message { role, .. } if role == "user"),
+                )
+                .unwrap_or(items.len());
+            items.insert(insert_at, item);
+        }
+        items
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -3775,11 +3791,7 @@ impl Session {
             )
             .into_text(),
         );
-        let pending_hook_context = {
-            let mut guard = self.services.pending_hook_context.lock().await;
-            std::mem::take(&mut *guard)
-        };
-        developer_sections.extend(pending_hook_context);
+        developer_sections.extend(self.take_pending_hook_context().await);
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             developer_sections.push(developer_instructions.to_string());
         }
@@ -3865,6 +3877,11 @@ impl Session {
             items.push(contextual_user_message);
         }
         items
+    }
+
+    async fn take_pending_hook_context(&self) -> Vec<String> {
+        let mut guard = self.services.pending_hook_context.lock().await;
+        std::mem::take(&mut *guard)
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -4294,9 +4311,15 @@ impl Session {
         turn_context: &TurnContext,
         additional_context: &[String],
     ) {
-        let Some(item) = crate::context_manager::updates::build_developer_update_item(
+        let additional_context = crate::hook_output_spill::spill_hook_contexts(
+            &turn_context.config.codex_home,
+            self.conversation_id,
             additional_context.to_vec(),
-        ) else {
+        )
+        .await;
+        let Some(item) =
+            crate::context_manager::updates::build_developer_update_item(additional_context)
+        else {
             return;
         };
 
@@ -4304,6 +4327,16 @@ impl Session {
             .await;
         self.persist_rollout_response_items(std::slice::from_ref(&item))
             .await;
+    }
+
+    async fn spill_hook_contexts(&self, additional_context: Vec<String>) -> Vec<String> {
+        let codex_home = self.codex_home().await;
+        crate::hook_output_spill::spill_hook_contexts(
+            &codex_home,
+            self.conversation_id,
+            additional_context,
+        )
+        .await
     }
 
     pub(crate) async fn dispatch_user_prompt_submit_hook(
