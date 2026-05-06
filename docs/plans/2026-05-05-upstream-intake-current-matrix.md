@@ -87,7 +87,7 @@ Implication: most useful intake work crosses `codex-rs/core`, `app-server-protoc
 | Commit | Area | Functional value | Frozen boundary touched | Conflict | Decision | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
 | `d85783901c` | network-proxy | Cover DNS timeout blocking | network policy | Medium | P0-direct | `cargo test -p codex-network-proxy` |
-| `4fd7dfe223` | memories/MCP | Reject symlink traversal in local memory backend | memories state | Medium | P0-direct | `cargo test -p codex-core memories` or target memory crate |
+| `4fd7dfe223` | memories/MCP | Reject symlink traversal in local memory backend | memories state | Medium | N/A in current fork: `codex-rs/memories/mcp` crate is absent | `git ls-tree -r --name-only HEAD \| rg '^codex-rs/memories/mcp/'` has no hits; `cargo test -p codex-core memories` |
 | `35aaa5d9fc` | app-server transport | Bound websocket request sends with idle timeout | app-server transport | Medium | P0-direct | `cargo test -p codex-app-server` focused websocket tests |
 | `9e905528bb` | login/auth | Fix custom CA login behind TLS-inspecting proxies | auth transport | Low | P0-direct, implemented 2026-05-06 | `cargo test -p codex-client --test ca_env`; `cargo test -p codex-client`; `cargo test -p codex-login` |
 | `5d5500650b` | Windows PTY | Preserve ConPTY ownership during teardown | Windows process lifecycle | Medium | P0-direct | Windows CI plus relevant pty tests |
