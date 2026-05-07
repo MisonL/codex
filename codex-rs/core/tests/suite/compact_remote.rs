@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::compact::SUMMARY_PREFIX;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -50,6 +51,28 @@ fn estimate_compact_input_tokens(request: &responses::ResponsesRequest) -> i64 {
 fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64 {
     estimate_compact_input_tokens(request)
         .saturating_add(approx_token_count(&request.instructions_text()))
+}
+
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), canonical_json(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(canonical_json).collect())
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => value.clone(),
+    }
 }
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
@@ -292,6 +315,145 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             ]
         )
     );
+
+    Ok(())
+}
+
+async fn assert_remote_manual_compact_request_parity(
+    auth: CodexAuth,
+    configured_service_tier: Option<ServiceTier>,
+    expected_service_tier: Option<&str>,
+) -> Result<()> {
+    let mut builder = test_codex().with_auth(auth);
+    if let Some(service_tier) = configured_service_tier {
+        builder = builder.with_config(move |config| {
+            config.service_tier = Some(service_tier);
+        });
+    }
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("turn-one-assistant", "TURN_ONE_ASSISTANT"),
+            responses::ev_completed("turn-one-response"),
+        ]),
+    )
+    .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_CACHE_TIER_SUMMARY",
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "REMOTE_COMPACT_CACHE_TIER_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        response_requests.len(),
+        1,
+        "expected one normal responses request before manual compact"
+    );
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "expected exactly one remote compact request"
+    );
+    let normal_request = response_requests
+        .last()
+        .cloned()
+        .expect("last turn request missing");
+    let compact_request = compact_mock.single_request();
+    let normal_body = normal_request.body_json();
+    let compact_body = compact_request.body_json();
+
+    let mut expected_compact_body_without_input = normal_body.clone();
+    let expected_compact_object = expected_compact_body_without_input
+        .as_object_mut()
+        .expect("responses request body should be an object");
+    let ignored_fields = [
+        "input",
+        "client_metadata",
+        "include",
+        "parallel_tool_calls",
+        "store",
+        "stream",
+        "tool_choice",
+        "tools",
+    ];
+    for field in ignored_fields {
+        expected_compact_object.remove(field);
+    }
+    if expected_service_tier.is_none() {
+        expected_compact_object.remove("service_tier");
+    }
+    let mut compact_body_without_input = compact_body.clone();
+    compact_body_without_input
+        .as_object_mut()
+        .expect("compact request body should be an object")
+        .retain(|key, _| !ignored_fields.contains(&key.as_str()));
+    let canonical_compact_body_without_input = canonical_json(&compact_body_without_input);
+    let canonical_expected_compact_body_without_input =
+        canonical_json(&expected_compact_body_without_input);
+
+    assert_eq!(
+        json!({
+            "compact_body_without_input": canonical_compact_body_without_input,
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
+            "prompt_cache_key_matches_responses": compact_body["prompt_cache_key"] == normal_body["prompt_cache_key"],
+            "prompt_cache_key_present": compact_body["prompt_cache_key"].is_string(),
+            "service_tier": compact_body.get("service_tier").and_then(serde_json::Value::as_str),
+        }),
+        json!({
+            "compact_body_without_input": canonical_expected_compact_body_without_input,
+            "expected_compact_body_without_input": canonical_expected_compact_body_without_input,
+            "prompt_cache_key_matches_responses": true,
+            "prompt_cache_key_present": true,
+            "service_tier": expected_service_tier,
+        }),
+        "compact requests should carry the same shared request fields as /responses"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_api_auth_reuses_prompt_cache_key() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_remote_manual_compact_request_parity(
+        CodexAuth::from_api_key("dummy"),
+        Some(ServiceTier::Fast),
+        Some("priority"),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache_key() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    assert_remote_manual_compact_request_parity(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        Some(ServiceTier::Fast),
+        Some("priority"),
+    )
+    .await?;
 
     Ok(())
 }

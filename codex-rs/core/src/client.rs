@@ -143,6 +143,12 @@ struct CurrentClientSetup {
     api_auth: CoreAuthProvider,
 }
 
+pub(crate) struct CompactConversationRequestSettings {
+    pub(crate) effort: Option<ReasoningEffortConfig>,
+    pub(crate) summary: ReasoningSummaryConfig,
+    pub(crate) service_tier: Option<ServiceTier>,
+}
+
 /// A session-scoped client for model-provider API calls.
 ///
 /// This holds configuration and state that should be shared across turns within a Codex session
@@ -277,28 +283,55 @@ impl ModelClient {
     ///
     /// The model selection and telemetry context are passed explicitly to keep `ModelClient`
     /// session-scoped.
-    pub async fn compact_conversation_history(
+    pub(crate) async fn compact_conversation_history(
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        settings: CompactConversationRequestSettings,
         session_telemetry: &SessionTelemetry,
     ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
         let client_setup = self.current_client_setup().await?;
+        let request_session = self.new_session();
+        let request = request_session.build_responses_request(
+            &client_setup.api_provider,
+            prompt,
+            model_info,
+            settings.effort,
+            settings.summary,
+            settings.service_tier,
+        )?;
+        let ResponsesApiRequest {
+            model,
+            input,
+            instructions,
+            tools,
+            parallel_tool_calls,
+            reasoning,
+            service_tier,
+            prompt_cache_key,
+            text,
+            ..
+        } = request;
+        let payload = ApiCompactionInput {
+            model: &model,
+            input: &input,
+            instructions: &instructions,
+            tools,
+            parallel_tool_calls,
+            reasoning,
+            service_tier: service_tier.as_deref(),
+            prompt_cache_key: prompt_cache_key.as_deref(),
+            text,
+        };
+
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(session_telemetry);
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
-
-        let instructions = prompt.base_instructions.text.clone();
-        let payload = ApiCompactionInput {
-            model: &model_info.slug,
-            input: &prompt.input,
-            instructions: &instructions,
-        };
 
         let mut extra_headers = self.build_subagent_headers();
         extra_headers.extend(build_conversation_headers(Some(

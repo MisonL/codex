@@ -21,6 +21,16 @@ pub struct CompactionInput<'a> {
     pub model: &'a str,
     pub input: &'a [ResponseItem],
     pub instructions: &'a str,
+    pub tools: Vec<Value>,
+    pub parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextControls>,
 }
 
 /// Canonical input payload for the memory summarize endpoint.

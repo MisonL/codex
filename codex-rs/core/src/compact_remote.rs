@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::Prompt;
+use crate::client::CompactConversationRequestSettings;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::InitialContextInjection;
@@ -107,6 +108,11 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,
+            CompactConversationRequestSettings {
+                effort: turn_context.reasoning_effort,
+                summary: turn_context.reasoning_summary,
+                service_tier: turn_context.config.service_tier,
+            },
             &turn_context.session_telemetry,
         )
         .or_else(|err| async {
