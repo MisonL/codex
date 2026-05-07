@@ -24,6 +24,7 @@ pub(crate) const DEFAULT_HOOK_EVENT_KEYS: &[&str] = &[
     "subagent_start",
     "subagent_stop",
     "pre_compact",
+    "post_compact",
     "worktree_create",
     "worktree_remove",
 ];

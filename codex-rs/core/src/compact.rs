@@ -64,7 +64,14 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        initial_context_injection,
+        "auto_compact",
+    )
+    .await?;
     Ok(())
 }
 
@@ -84,6 +91,7 @@ pub(crate) async fn run_compact_task(
         turn_context,
         input,
         InitialContextInjection::DoNotInject,
+        "manual_compact",
     )
     .await
 }
@@ -93,7 +101,10 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
+    trigger: &str,
 ) -> CodexResult<()> {
+    sess.dispatch_pre_compact_hook(turn_context.as_ref(), trigger)
+        .await;
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
@@ -224,6 +235,8 @@ async fn run_compact_task_inner(
     sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
+        .await;
+    sess.dispatch_post_compact_hook(turn_context.as_ref(), trigger)
         .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),

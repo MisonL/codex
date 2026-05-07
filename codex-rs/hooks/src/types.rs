@@ -92,6 +92,10 @@ pub enum HookEvent {
         trigger: String,
         custom_instructions: Option<String>,
     },
+    PostCompact {
+        trigger: String,
+        custom_instructions: Option<String>,
+    },
     WorktreeCreate {
         name: String,
     },
@@ -114,7 +118,9 @@ impl HookEvent {
             } => Some(notification_type),
             HookEvent::SubagentStart { agent_type, .. }
             | HookEvent::SubagentStop { agent_type, .. } => Some(agent_type),
-            HookEvent::PreCompact { trigger, .. } => Some(trigger),
+            HookEvent::PreCompact { trigger, .. } | HookEvent::PostCompact { trigger, .. } => {
+                Some(trigger)
+            }
             HookEvent::ConfigChange { source, .. } => Some(source),
             _ => None,
         }

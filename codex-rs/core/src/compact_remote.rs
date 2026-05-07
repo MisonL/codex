@@ -28,7 +28,13 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        initial_context_injection,
+        "auto_compact",
+    )
+    .await?;
     Ok(())
 }
 
@@ -43,14 +49,23 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        InitialContextInjection::DoNotInject,
+        "manual_compact",
+    )
+    .await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    trigger: &str,
 ) -> CodexResult<()> {
+    sess.dispatch_pre_compact_hook(turn_context.as_ref(), trigger)
+        .await;
     if let Err(err) =
         run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await
     {
@@ -60,6 +75,8 @@ async fn run_remote_compact_task_inner(
         sess.send_event(turn_context, event).await;
         return Err(err);
     }
+    sess.dispatch_post_compact_hook(turn_context.as_ref(), trigger)
+        .await;
     Ok(())
 }
 

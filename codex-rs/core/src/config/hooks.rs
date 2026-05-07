@@ -60,6 +60,7 @@ struct HooksToml {
     subagent_start: Vec<HookEntryToml>,
     subagent_stop: Vec<HookEntryToml>,
     pre_compact: Vec<HookEntryToml>,
+    post_compact: Vec<HookEntryToml>,
     worktree_create: Vec<HookEntryToml>,
     worktree_remove: Vec<HookEntryToml>,
 }
@@ -148,6 +149,8 @@ fn extend_command_hooks(dst: &mut CommandHooksConfig, src: HooksToml) {
         .extend(src.subagent_stop.into_iter().map(command_hook_from_entry));
     dst.pre_compact
         .extend(src.pre_compact.into_iter().map(command_hook_from_entry));
+    dst.post_compact
+        .extend(src.post_compact.into_iter().map(command_hook_from_entry));
     dst.worktree_create
         .extend(src.worktree_create.into_iter().map(command_hook_from_entry));
     dst.worktree_remove

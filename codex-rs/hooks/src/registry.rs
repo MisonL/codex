@@ -91,6 +91,7 @@ pub struct CommandHooksConfig {
     pub subagent_start: Vec<CommandHookConfig>,
     pub subagent_stop: Vec<CommandHookConfig>,
     pub pre_compact: Vec<CommandHookConfig>,
+    pub post_compact: Vec<CommandHookConfig>,
     pub worktree_create: Vec<CommandHookConfig>,
     pub worktree_remove: Vec<CommandHookConfig>,
 }
@@ -144,6 +145,7 @@ pub struct Hooks {
     subagent_start: Vec<Hook>,
     subagent_stop: Vec<Hook>,
     pre_compact: Vec<Hook>,
+    post_compact: Vec<Hook>,
     worktree_create: Vec<Hook>,
     worktree_remove: Vec<Hook>,
     ran_once: Arc<Mutex<HashSet<String>>>,
@@ -169,6 +171,7 @@ struct ScopedHooks {
     subagent_start: Vec<Hook>,
     subagent_stop: Vec<Hook>,
     pre_compact: Vec<Hook>,
+    post_compact: Vec<Hook>,
     worktree_create: Vec<Hook>,
     worktree_remove: Vec<Hook>,
 }
@@ -191,6 +194,7 @@ impl ScopedHooks {
             HookEvent::SubagentStart { .. } => &self.subagent_start,
             HookEvent::SubagentStop { .. } => &self.subagent_stop,
             HookEvent::PreCompact { .. } => &self.pre_compact,
+            HookEvent::PostCompact { .. } => &self.post_compact,
             HookEvent::WorktreeCreate { .. } => &self.worktree_create,
             HookEvent::WorktreeRemove { .. } => &self.worktree_remove,
         }
@@ -306,6 +310,7 @@ enum HookEventKey {
     SubagentStart,
     SubagentStop,
     PreCompact,
+    PostCompact,
     WorktreeCreate,
     WorktreeRemove,
 }
@@ -328,6 +333,7 @@ impl HookEventKey {
             HookEventKey::SubagentStart => "subagent_start",
             HookEventKey::SubagentStop => "subagent_stop",
             HookEventKey::PreCompact => "pre_compact",
+            HookEventKey::PostCompact => "post_compact",
             HookEventKey::WorktreeCreate => "worktree_create",
             HookEventKey::WorktreeRemove => "worktree_remove",
         }
@@ -387,6 +393,7 @@ impl HookEventKey {
                 | HookEventKey::Notification
                 | HookEventKey::SubagentStart
                 | HookEventKey::PreCompact
+                | HookEventKey::PostCompact
                 | HookEventKey::SubagentStop
                 | HookEventKey::ConfigChange
         )
@@ -436,6 +443,7 @@ impl Hooks {
             subagent_start: build_hooks(command_hooks.subagent_start, HookEventKey::SubagentStart),
             subagent_stop: build_hooks(command_hooks.subagent_stop, HookEventKey::SubagentStop),
             pre_compact: build_hooks(command_hooks.pre_compact, HookEventKey::PreCompact),
+            post_compact: build_hooks(command_hooks.post_compact, HookEventKey::PostCompact),
             worktree_create: build_hooks(
                 command_hooks.worktree_create,
                 HookEventKey::WorktreeCreate,
@@ -500,6 +508,7 @@ impl Hooks {
             HookEvent::SubagentStart { .. } => (HookEventKey::SubagentStart, &self.subagent_start),
             HookEvent::SubagentStop { .. } => (HookEventKey::SubagentStop, &self.subagent_stop),
             HookEvent::PreCompact { .. } => (HookEventKey::PreCompact, &self.pre_compact),
+            HookEvent::PostCompact { .. } => (HookEventKey::PostCompact, &self.post_compact),
             HookEvent::WorktreeCreate { .. } => {
                 (HookEventKey::WorktreeCreate, &self.worktree_create)
             }
@@ -900,6 +909,11 @@ fn build_scoped_hooks(scope_id: &str, command_hooks: CommandHooksConfig) -> Scop
             scope_id,
             command_hooks.pre_compact,
             HookEventKey::PreCompact,
+        ),
+        post_compact: build_hooks_with_prefix(
+            scope_id,
+            command_hooks.post_compact,
+            HookEventKey::PostCompact,
         ),
         worktree_create: build_hooks_with_prefix(
             scope_id,

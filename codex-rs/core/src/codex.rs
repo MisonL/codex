@@ -4443,6 +4443,52 @@ impl Session {
             .await;
     }
 
+    pub(crate) async fn dispatch_post_compact_hook(
+        &self,
+        turn_context: &TurnContext,
+        trigger: &str,
+    ) {
+        let hook_outcomes = self
+            .hooks()
+            .dispatch(HookPayload {
+                session_id: self.conversation_id,
+                transcript_path: self.transcript_path().await,
+                cwd: turn_context.cwd.clone(),
+                permission_mode: turn_context.approval_policy.value().to_string(),
+                hook_event: HookEvent::PostCompact {
+                    trigger: trigger.to_string(),
+                    custom_instructions: turn_context.compact_prompt.clone(),
+                },
+            })
+            .await;
+
+        let mut additional_context = Vec::new();
+        for hook_outcome in hook_outcomes {
+            let hook_name = hook_outcome.hook_name;
+            let result = hook_outcome.result;
+            if let Some(error) = result.error.as_deref() {
+                warn!(
+                    turn_id = %turn_context.sub_id,
+                    hook_name = %hook_name,
+                    error,
+                    "post_compact hook failed; continuing"
+                );
+            }
+            if let HookResultControl::Block { reason } = result.control {
+                warn!(
+                    turn_id = %turn_context.sub_id,
+                    hook_name = %hook_name,
+                    reason,
+                    "post_compact hook returned a blocking decision; ignoring"
+                );
+            }
+            additional_context.extend(result.additional_context);
+        }
+
+        self.record_hook_context(turn_context, &additional_context)
+            .await;
+    }
+
     pub(crate) fn hooks(&self) -> &Hooks {
         &self.services.hooks
     }
@@ -5389,8 +5435,6 @@ mod handlers {
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-        sess.dispatch_pre_compact_hook(turn_context.as_ref(), "manual_compact")
-            .await;
         sess.spawn_task(
             Arc::clone(&turn_context),
             vec![UserInput::Text {
