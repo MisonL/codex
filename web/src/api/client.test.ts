@@ -58,4 +58,3 @@ describe('ApiClient', () => {
         expect(body).not.toHaveProperty('reasoningEffort')
     })
 })
-

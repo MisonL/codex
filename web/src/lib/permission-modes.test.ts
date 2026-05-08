@@ -6,4 +6,3 @@ describe('permission modes', () => {
         expect(getPermissionModesForFlavor('codex')).toContain('plan')
     })
 })
-

@@ -18,4 +18,3 @@ export function useWorkspaceKanban(api: ApiClient | null, workspaceId: string | 
         }
     })
 }
-

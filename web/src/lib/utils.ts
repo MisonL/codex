@@ -27,4 +27,3 @@ export function encodeBase64(value: string): string {
     const binaryString = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
     return btoa(binaryString)
 }
-

@@ -1,4 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useId } from 'react'
 import type { Suggestion } from '@/hooks/useActiveSuggestions'
 import { Autocomplete } from '@/components/ChatInput/Autocomplete'
 import { FloatingOverlay } from '@/components/ChatInput/FloatingOverlay'
@@ -21,14 +22,16 @@ export function DirectorySection(props: {
     onClearRecentPaths: () => void
 }) {
     const { t } = useTranslation()
+    const directoryInputId = useId()
 
     return (
         <div className="flex flex-col gap-1.5 px-3 py-3">
-            <label className="text-xs font-medium text-[var(--app-hint)]">
+            <label htmlFor={directoryInputId} className="text-xs font-medium text-[var(--app-hint)]">
                 {t('newSession.directory')}
             </label>
             <div className="relative">
                 <input
+                    id={directoryInputId}
                     type="text"
                     placeholder={t('newSession.placeholder')}
                     value={props.directory}

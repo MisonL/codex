@@ -15,4 +15,3 @@ export function useGithubJobs(api: ApiClient | null) {
         }
     })
 }
-

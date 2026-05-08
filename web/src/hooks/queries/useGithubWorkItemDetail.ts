@@ -18,4 +18,3 @@ export function useGithubWorkItemDetail(api: ApiClient | null, workItemKey: stri
         }
     })
 }
-

@@ -29,4 +29,3 @@ describe('PlanUpdatePanel', () => {
         expect(screen.queryByText('Plan')).toBeNull()
     })
 })
-

@@ -37,6 +37,28 @@ describe('DirectorySection', () => {
         expect(screen.getByText('newSession.directory.notFound')).toBeInTheDocument()
     })
 
+    it('associates the directory label with the input', () => {
+        renderWithSpyT(
+            <DirectorySection
+                directory=""
+                suggestions={[]}
+                selectedIndex={-1}
+                isDisabled={false}
+                recentPaths={[]}
+                onDirectoryChange={vi.fn()}
+                onDirectoryFocus={vi.fn()}
+                onDirectoryBlur={vi.fn()}
+                onDirectoryKeyDown={vi.fn()}
+                onSuggestionSelect={vi.fn()}
+                onPathClick={vi.fn()}
+                onPathRemove={vi.fn()}
+                onClearRecentPaths={vi.fn()}
+            />
+        )
+
+        expect(screen.getByLabelText('newSession.directory')).toBeInTheDocument()
+    })
+
     it('supports removing and clearing recent paths', () => {
         const onPathClick = vi.fn()
         const onPathRemove = vi.fn()

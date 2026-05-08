@@ -33,4 +33,3 @@ describe('getComposerAutocompleteSuggestions', () => {
         expect(getSlashSuggestions).toHaveBeenCalledWith('/c')
     })
 })
-

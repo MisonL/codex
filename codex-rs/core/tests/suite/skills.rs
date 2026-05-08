@@ -6,8 +6,11 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::fs_wait;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -16,11 +19,23 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::path::PathBuf {
+    write_skill_with_frontmatter(home, name, description, "", body)
+}
+
+fn write_skill_with_frontmatter(
+    home: &Path,
+    name: &str,
+    description: &str,
+    frontmatter: &str,
+    body: &str,
+) -> std::path::PathBuf {
     let skill_dir = home.join("skills").join(name);
     fs::create_dir_all(&skill_dir).unwrap();
-    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
+    let contents =
+        format!("---\nname: {name}\ndescription: {description}\n{frontmatter}---\n\n{body}\n");
     let path = skill_dir.join("SKILL.md");
     fs::write(&path, contents).unwrap();
     path
@@ -102,6 +117,94 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
         "expected skill instructions in user input, got {user_texts:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_compact_skill_scoped_hook_runs_from_frontmatter() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let function_call_id = "call-post-compact-skill";
+    let skill_name = "compact-finish";
+    let marker_name = "post_compact_marker.txt";
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            let marker_path = home.join(marker_name);
+            let marker = marker_path.to_string_lossy().replace('\'', "'\\''");
+            let command = format!("printf post_compact > '{marker}'");
+            let frontmatter = format!(
+                "hooks:\n  PostCompact:\n    - matcher: \"^auto_compact$\"\n      hooks:\n        - type: command\n          command: {command:?}\n"
+            );
+            write_skill_with_frontmatter(
+                home,
+                skill_name,
+                "Post compact hook",
+                &frontmatter,
+                "hook body",
+            );
+        })
+        .with_config(|config| {
+            config.model_provider.name = "OpenAI (test)".to_string();
+            config.model_auto_compact_token_limit = Some(90);
+        });
+    let test = builder.build(&server).await?;
+    let skill_path = std::fs::canonicalize(
+        test.codex_home_path()
+            .join("skills")
+            .join(skill_name)
+            .join("SKILL.md"),
+    )?;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_function_call(function_call_id, "test_tool", "{}"),
+            ev_completed_with_tokens("resp-1", 96),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "COMPACT_SUMMARY"),
+            ev_completed_with_tokens("resp-2", 10),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-3", "done"),
+            ev_completed_with_tokens("resp-3", 10),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![
+                UserInput::Text {
+                    text: "please use $compact-finish".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: skill_name.to_string(),
+                    path: skill_path,
+                },
+            ],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    core_test_support::wait_for_event(test.codex.as_ref(), |event| {
+        matches!(event, codex_protocol::protocol::EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let marker_path = test.codex_home_path().join(marker_name);
+    fs_wait::wait_for_path_exists(&marker_path, Duration::from_secs(2)).await?;
+    assert_eq!(fs::read_to_string(marker_path)?, "post_compact");
     Ok(())
 }
 

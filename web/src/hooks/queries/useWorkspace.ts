@@ -18,4 +18,3 @@ export function useWorkspace(api: ApiClient | null, workspaceId: string | null) 
         }
     })
 }
-

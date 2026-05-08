@@ -41,4 +41,3 @@ export function ReasoningEffortSelector(props: {
         </div>
     )
 }
-

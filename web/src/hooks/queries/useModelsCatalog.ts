@@ -16,4 +16,3 @@ export function useModelsCatalog(api: ApiClient | null) {
         }
     })
 }
-

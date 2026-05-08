@@ -15,4 +15,3 @@ export function useGithubWorkItems(api: ApiClient | null) {
         }
     })
 }
-

@@ -6,4 +6,3 @@ describe('MODEL_OPTIONS', () => {
         expect(MODEL_OPTIONS.codex.some((opt) => opt.value === 'gpt-5.2-codex')).toBe(true)
     })
 })
-

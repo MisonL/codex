@@ -48,4 +48,3 @@ export function PlanUpdatePanel(props: { planUpdate: PlanUpdate | null | undefin
         </div>
     )
 }
-

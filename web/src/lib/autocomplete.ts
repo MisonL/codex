@@ -15,4 +15,3 @@ export async function getComposerAutocompleteSuggestions(
     }
     return await handlers.getSlashSuggestions(query)
 }
-

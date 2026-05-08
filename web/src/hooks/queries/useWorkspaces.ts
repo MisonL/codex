@@ -15,4 +15,3 @@ export function useWorkspaces(api: ApiClient | null) {
         }
     })
 }
-

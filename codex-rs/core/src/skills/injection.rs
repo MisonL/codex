@@ -255,6 +255,7 @@ fn command_hooks_config_is_empty(hooks: &CommandHooksConfig) -> bool {
         && hooks.subagent_start.is_empty()
         && hooks.subagent_stop.is_empty()
         && hooks.pre_compact.is_empty()
+        && hooks.post_compact.is_empty()
         && hooks.worktree_create.is_empty()
         && hooks.worktree_remove.is_empty()
 }
@@ -280,6 +281,7 @@ fn push_hook_for_event(
         "SubagentStart" => hooks.subagent_start.push(hook),
         "SubagentStop" => hooks.subagent_stop.push(hook),
         "PreCompact" => hooks.pre_compact.push(hook),
+        "PostCompact" => hooks.post_compact.push(hook),
         "WorktreeCreate" => hooks.worktree_create.push(hook),
         "WorktreeRemove" => hooks.worktree_remove.push(hook),
         _ => return false,
