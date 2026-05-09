@@ -43,6 +43,8 @@ use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
+const IMAGE_EVENT_TIMEOUT: Duration = Duration::from_secs(60);
+
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
         .and_then(Value::as_array)
@@ -122,8 +124,9 @@ async fn assert_user_turn_local_image_resizes_to(
     wait_for_event_with_timeout(
         &codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        // Empirically, image attachment can be slow under Bazel/RBE.
-        Duration::from_secs(10),
+        // Image attachment does CPU-bound decode/resize/encode work and can run slowly when
+        // this integration group executes concurrently.
+        IMAGE_EVENT_TIMEOUT,
     )
     .await;
 
@@ -246,7 +249,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         },
         // Empirically, we have seen this run slow when run under
         // Bazel on arm Linux.
-        Duration::from_secs(10),
+        IMAGE_EVENT_TIMEOUT,
     )
     .await;
 
@@ -366,7 +369,7 @@ async fn view_image_tool_can_preserve_original_resolution_on_gpt5_3_codex() -> a
     wait_for_event_with_timeout(
         &codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        IMAGE_EVENT_TIMEOUT,
     )
     .await;
 
@@ -465,7 +468,7 @@ async fn view_image_tool_keeps_legacy_behavior_below_gpt5_3_codex() -> anyhow::R
     wait_for_event_with_timeout(
         &codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        IMAGE_EVENT_TIMEOUT,
     )
     .await;
 
@@ -574,7 +577,7 @@ await codex.emitImage(out);
             EventMsg::TurnComplete(_) => true,
             _ => false,
         },
-        Duration::from_secs(10),
+        IMAGE_EVENT_TIMEOUT,
     )
     .await;
     let tool_event = match tool_event {
@@ -689,7 +692,7 @@ console.log(out.type);
             EventMsg::TurnComplete(_) => true,
             _ => false,
         },
-        Duration::from_secs(10),
+        IMAGE_EVENT_TIMEOUT,
     )
     .await;
     let tool_event = match tool_event {

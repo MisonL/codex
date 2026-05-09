@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Output;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +18,8 @@ use anyhow::bail;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use tokio::fs;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::time::timeout;
@@ -30,6 +33,7 @@ pub struct ShellSnapshot {
 }
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
+const SNAPSHOT_KILL_WAIT: Duration = Duration::from_secs(1);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
@@ -265,10 +269,7 @@ async fn run_script_with_timeout(
         });
     }
     handler.kill_on_drop(true);
-    let output = timeout(snapshot_timeout, handler.output())
-        .await
-        .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
-        .with_context(|| format!("Failed to execute {shell_name}"))?;
+    let output = run_child_with_timeout(&mut handler, snapshot_timeout, shell_name).await?;
 
     if !output.status.success() {
         let status = output.status;
@@ -277,6 +278,93 @@ async fn run_script_with_timeout(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+async fn run_child_with_timeout(
+    handler: &mut Command,
+    snapshot_timeout: Duration,
+    shell_name: &str,
+) -> Result<Output> {
+    handler.stdout(Stdio::piped());
+    handler.stderr(Stdio::piped());
+
+    let mut child = handler
+        .spawn()
+        .with_context(|| format!("Failed to execute {shell_name}"))?;
+    let process_group_id = child.id();
+    let stdout = child.stdout.take().context("Failed to capture stdout")?;
+    let stderr = child.stderr.take().context("Failed to capture stderr")?;
+    let mut stdout_task = tokio::spawn(read_to_end(stdout));
+    let mut stderr_task = tokio::spawn(read_to_end(stderr));
+
+    let output = timeout(snapshot_timeout, async {
+        let status = child
+            .wait()
+            .await
+            .with_context(|| format!("Failed to execute {shell_name}"))?;
+        let stdout = (&mut stdout_task)
+            .await
+            .context("Snapshot stdout reader failed")??;
+        let stderr = (&mut stderr_task)
+            .await
+            .context("Snapshot stderr reader failed")??;
+        Ok::<_, anyhow::Error>(Output {
+            status,
+            stdout,
+            stderr,
+        })
+    })
+    .await;
+
+    match output {
+        Ok(output) => output,
+        Err(_) => {
+            kill_timed_out_snapshot_process(&mut child, process_group_id, shell_name).await;
+            stdout_task.abort();
+            stderr_task.abort();
+            Err(anyhow!("Snapshot command timed out for {shell_name}"))
+        }
+    }
+}
+
+async fn read_to_end<R>(mut reader: R) -> std::io::Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut output = Vec::new();
+    reader.read_to_end(&mut output).await?;
+    Ok(output)
+}
+
+async fn kill_timed_out_snapshot_process(
+    child: &mut tokio::process::Child,
+    process_group_id: Option<u32>,
+    shell_name: &str,
+) {
+    let mut killed_process_group = false;
+    #[cfg(unix)]
+    if let Some(process_group_id) = process_group_id {
+        killed_process_group = true;
+        if let Err(err) = codex_utils_pty::process_group::kill_process_group(process_group_id) {
+            tracing::warn!(
+                "Failed to kill timed out snapshot process group for {shell_name}: {err}"
+            );
+        }
+    }
+
+    if !killed_process_group && let Err(err) = child.start_kill() {
+        tracing::warn!("Failed to kill timed out snapshot child for {shell_name}: {err}");
+    }
+
+    match timeout(SNAPSHOT_KILL_WAIT, child.wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            tracing::warn!("Failed to wait for timed out snapshot child for {shell_name}: {err}");
+        }
+        Err(_) => {
+            tracing::warn!("Timed out waiting for snapshot child cleanup for {shell_name}");
+        }
+    }
 }
 
 fn excluded_exports_regex() -> String {
@@ -540,7 +628,7 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     #[cfg(unix)]
     use std::process::Command;
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     use std::process::Command as StdCommand;
 
     use tempfile::tempdir;
@@ -778,17 +866,21 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
-        use std::process::Stdio;
         use tokio::time::Duration as TokioDuration;
         use tokio::time::Instant;
         use tokio::time::sleep;
 
         let dir = tempdir()?;
         let pid_path = dir.path().join("pid");
-        let script = format!("echo $$ > \"{}\"; sleep 30", pid_path.display());
+        let child_pid_path = dir.path().join("child-pid");
+        let script = format!(
+            "echo $$ > \"{}\"; sh -c 'echo $$ > \"{}\"; sleep 30' & sleep 30",
+            pid_path.display(),
+            child_pid_path.display()
+        );
 
         let shell = Shell {
             shell_type: ShellType::Sh,
@@ -805,30 +897,44 @@ mod tests {
             "expected timeout error, got {err:?}"
         );
 
-        let pid = fs::read_to_string(&pid_path)
+        let parent_pid = fs::read_to_string(&pid_path)
             .await
             .expect("snapshot shell writes its pid before timing out")
+            .trim()
+            .parse::<i32>()?;
+        let child_pid = fs::read_to_string(&child_pid_path)
+            .await
+            .expect("snapshot child writes its pid before timing out")
             .trim()
             .parse::<i32>()?;
 
         let deadline = Instant::now() + TokioDuration::from_secs(1);
         loop {
-            let kill_status = StdCommand::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .stderr(Stdio::null())
-                .stdout(Stdio::null())
-                .status()?;
-            if !kill_status.success() {
+            if !process_exists(parent_pid)? && !process_exists(child_pid)? {
                 break;
             }
             if Instant::now() >= deadline {
-                panic!("timed out snapshot shell is still alive after grace period");
+                panic!(
+                    "timed out snapshot process group is still alive after grace period: parent_alive={}, child_alive={}",
+                    process_exists(parent_pid)?,
+                    process_exists(child_pid)?
+                );
             }
             sleep(TokioDuration::from_millis(50)).await;
         }
 
         Ok(())
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: i32) -> Result<bool> {
+        let kill_status = StdCommand::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .status()?;
+        Ok(kill_status.success())
     }
 
     #[cfg(target_os = "macos")]
