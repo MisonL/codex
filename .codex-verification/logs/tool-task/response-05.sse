@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp-5"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","id":"msg-5","content":[{"type":"output_text","text":"Completed deterministic coding task: reproduced failing unittest, patched duration_parser.py, reran unittest, captured git diff, and exercised remaining non-interactive tool entries."}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp-5","usage":{"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}}}
+

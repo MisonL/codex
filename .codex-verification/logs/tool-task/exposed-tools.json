@@ -1,0 +1,14 @@
+[
+  "exec_command",
+  "write_stdin",
+  "update_plan",
+  "js_repl",
+  "js_repl_reset",
+  "request_user_input",
+  "CronCreate",
+  "CronList",
+  "CronDelete",
+  "apply_patch",
+  "web_search",
+  "view_image"
+]

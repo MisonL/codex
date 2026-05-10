@@ -1,0 +1,18 @@
+[
+  "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/bin/codex",
+  "exec",
+  "--json",
+  "--enable",
+  "apply_patch_freeform",
+  "--enable",
+  "js_repl",
+  "--enable",
+  "default_mode_request_user_input",
+  "--skip-git-repo-check",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--model",
+  "gpt-5",
+  "--cd",
+  "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/work/duration-fixture",
+  "Fix duration_parser.py so all unittest tests pass. Use the available tools to inspect, reproduce, patch, rerun, and show diff evidence."
+]

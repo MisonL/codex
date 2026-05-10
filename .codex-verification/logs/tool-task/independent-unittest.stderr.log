@@ -1,0 +1,8 @@
+test_mixed_units (test_duration_parser.ParseDurationTests.test_mixed_units) ... ok
+test_rejects_invalid_tail (test_duration_parser.ParseDurationTests.test_rejects_invalid_tail) ... ok
+test_single_unit (test_duration_parser.ParseDurationTests.test_single_unit) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+OK

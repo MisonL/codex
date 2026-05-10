@@ -1,0 +1,20 @@
+diff --git a/duration_parser.py b/duration_parser.py
+index 3cef3e9..4b2d1ab 100644
+--- a/duration_parser.py
++++ b/duration_parser.py
+@@ -9,8 +9,11 @@ UNITS = {
+ 
+ 
+ def parse_duration(value):
+-    match = re.fullmatch(r'\s*(\d+)\s*([smh])\s*', value)
+-    if not match:
++    parts = re.findall(r'(\d+)\s*([smh])', value)
++    if not parts:
+         raise ValueError(f'invalid duration: {value!r}')
+-    amount, unit = match.groups()
+-    return int(amount) * UNITS[unit]
++    consumed = ''.join(f'{amount}{unit}' for amount, unit in parts)
++    compact = re.sub(r'\s+', '', value)
++    if consumed != compact:
++        raise ValueError(f'invalid duration: {value!r}')
++    return sum(int(amount) * UNITS[unit] for amount, unit in parts)

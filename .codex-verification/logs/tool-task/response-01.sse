@@ -1,0 +1,24 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp-1"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"plan-start","name":"update_plan","arguments":"{\"explanation\":\"Run failing test, inspect code, patch parser, rerun tests.\",\"plan\":[{\"step\":\"Inspect fixture\",\"status\":\"in_progress\"},{\"step\":\"Reproduce failing test\",\"status\":\"pending\"},{\"step\":\"Patch parser\",\"status\":\"pending\"},{\"step\":\"Rerun tests and diff\",\"status\":\"pending\"}]}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"js-calc","name":"js_repl","input":"const seconds = 3600 + 30 * 60 + 5;\nseconds"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"js-reset","name":"js_repl_reset","arguments":"{}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"view-image","name":"view_image","arguments":"{\"path\":\"/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/work/duration-fixture/evidence.png\"}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"test-red","name":"exec_command","arguments":"{\"cmd\":\"python3 -m unittest discover -v\",\"yield_time_ms\":1000,\"max_output_tokens\":6000}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"stdin-open","name":"exec_command","arguments":"{\"cmd\":\"python3 -u -c 'import time; print(\\\"ready\\\", flush=True); time.sleep(10); print(\\\"done\\\", flush=True)'\",\"tty\":true,\"yield_time_ms\":1000,\"max_output_tokens\":2000}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}}}
+

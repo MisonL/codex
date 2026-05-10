@@ -1,0 +1,416 @@
+{
+  "call_outputs": {
+    "cron-create": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "cron-delete-missing": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "cron-list": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "diff-evidence": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "js-calc": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "js-reset": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "patch-parser": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "plan-done": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "plan-start": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "request-user-input-invalid": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "stdin-open": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "test-green": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "test-red": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "view-image": {
+      "output_type": "list",
+      "request": "request-05.json"
+    },
+    "write-stdin-negative": {
+      "output_type": "str",
+      "request": "request-05.json"
+    },
+    "write-stdin-positive": {
+      "output_type": "str",
+      "request": "request-05.json"
+    }
+  },
+  "coding_task": {
+    "bug": "duration_parser.py initially handled only a single duration unit; mixed units failed.",
+    "fix": {
+      "evidence": "codex.stdout.jsonl file_change completed plus final.diff",
+      "tool": "apply_patch"
+    },
+    "green_test": {
+      "command": "python3 -m unittest discover -v",
+      "evidence": "codex.stdout.jsonl command_execution item for test-green",
+      "exit_code": 0
+    },
+    "independent_recheck": {
+      "command": "python3 -m unittest discover -v",
+      "evidence": "independent-unittest.stderr.log",
+      "exit_code": "0"
+    },
+    "red_test": {
+      "command": "python3 -m unittest discover -v",
+      "evidence": "codex.stdout.jsonl command_execution item for test-red",
+      "exit_code": 1
+    },
+    "workspace": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/work/duration-fixture"
+  },
+  "compiled_binary": {
+    "git_head": "fbc9276c1bce3080fa9c0fc767d26ba92506533a",
+    "path": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/bin/codex",
+    "version": "codex-cli 1.3.0"
+  },
+  "evidence_files": {
+    "codex_jsonl": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/codex.stdout.jsonl",
+    "codex_stderr": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/codex.stderr.log",
+    "exposed_tools": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/exposed-tools.json",
+    "final_diff": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/final.diff",
+    "harness": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/harness/codex_tool_task_harness.py",
+    "independent_unittest_stderr": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/independent-unittest.stderr.log",
+    "independent_unittest_stdout": "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/independent-unittest.stdout.log",
+    "request_bodies": [
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/request-01.json",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/request-02.json",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/request-03.json",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/request-04.json",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/request-05.json"
+    ],
+    "responses_sse": [
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/response-01.sse",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/response-02.sse",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/response-03.sse",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/response-04.sse",
+      "/Volumes/Work/code/stellarlinkco-codex-src/.codex-verification/logs/tool-task/response-05.sse"
+    ]
+  },
+  "limitations": [
+    "request_user_input is covered with an invalid-options negative call so codex exec does not block waiting for human input.",
+    "CronDelete is covered with a missing id negative call; CronCreate and CronList are positive session-scoped calls.",
+    "External/model-hosted web_search is covered by a web_search_call event in the fake Responses stream, not by live internet search."
+  ],
+  "objective": "Verify compiled Codex from /Volumes/Work/code/stellarlinkco-codex-src covers every AI-callable program tool exposed in this run and completes a real coding task with retained evidence.",
+  "runtime_scope": {
+    "exposed_tool_count": 12,
+    "exposed_tools": [
+      "exec_command",
+      "write_stdin",
+      "update_plan",
+      "js_repl",
+      "js_repl_reset",
+      "request_user_input",
+      "CronCreate",
+      "CronList",
+      "CronDelete",
+      "apply_patch",
+      "web_search",
+      "view_image"
+    ],
+    "scope_note": "This is the actual tool surface exposed by the compiled codex exec run under the harness config. Tools not listed here were not AI-callable in this run.",
+    "source_of_truth": "request-01.json tools array"
+  },
+  "tool_coverage": {
+    "CronCreate": {
+      "calls": [
+        {
+          "call_id": "cron-create",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    },
+    "CronDelete": {
+      "calls": [
+        {
+          "call_id": "cron-delete-missing",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called_negative_missing_id"
+    },
+    "CronList": {
+      "calls": [
+        {
+          "call_id": "cron-list",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    },
+    "apply_patch": {
+      "calls": [
+        {
+          "call_id": "patch-parser",
+          "request": "request-03.json",
+          "type": "custom_tool_call"
+        },
+        {
+          "call_id": "patch-parser",
+          "request": "request-04.json",
+          "type": "custom_tool_call"
+        },
+        {
+          "call_id": "patch-parser",
+          "request": "request-05.json",
+          "type": "custom_tool_call"
+        }
+      ],
+      "status": "called"
+    },
+    "exec_command": {
+      "calls": [
+        {
+          "call_id": "test-red",
+          "request": "request-02.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "stdin-open",
+          "request": "request-02.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "test-red",
+          "request": "request-03.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "stdin-open",
+          "request": "request-03.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "test-red",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "stdin-open",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "test-green",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "diff-evidence",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "test-red",
+          "request": "request-05.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "stdin-open",
+          "request": "request-05.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "test-green",
+          "request": "request-05.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "diff-evidence",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    },
+    "js_repl": {
+      "calls": [
+        {
+          "call_id": "js-calc",
+          "request": "request-02.json",
+          "type": "custom_tool_call"
+        },
+        {
+          "call_id": "js-calc",
+          "request": "request-03.json",
+          "type": "custom_tool_call"
+        },
+        {
+          "call_id": "js-calc",
+          "request": "request-04.json",
+          "type": "custom_tool_call"
+        },
+        {
+          "call_id": "js-calc",
+          "request": "request-05.json",
+          "type": "custom_tool_call"
+        }
+      ],
+      "status": "called"
+    },
+    "js_repl_reset": {
+      "calls": [
+        {
+          "call_id": "js-reset",
+          "request": "request-02.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "js-reset",
+          "request": "request-03.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "js-reset",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "js-reset",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    },
+    "request_user_input": {
+      "calls": [
+        {
+          "call_id": "request-user-input-invalid",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called_negative_nonblocking"
+    },
+    "update_plan": {
+      "calls": [
+        {
+          "call_id": "plan-start",
+          "request": "request-02.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "plan-start",
+          "request": "request-03.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "plan-start",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "plan-done",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "plan-start",
+          "request": "request-05.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "plan-done",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    },
+    "view_image": {
+      "calls": [
+        {
+          "call_id": "view-image",
+          "request": "request-02.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "view-image",
+          "request": "request-03.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "view-image",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "view-image",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    },
+    "web_search": {
+      "calls": [
+        {
+          "call_id": null,
+          "request": "request-05.json",
+          "type": "web_search_call"
+        }
+      ],
+      "status": "called"
+    },
+    "write_stdin": {
+      "calls": [
+        {
+          "call_id": "write-stdin-positive",
+          "request": "request-03.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "write-stdin-positive",
+          "request": "request-04.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "write-stdin-positive",
+          "request": "request-05.json",
+          "type": "function_call"
+        },
+        {
+          "call_id": "write-stdin-negative",
+          "request": "request-05.json",
+          "type": "function_call"
+        }
+      ],
+      "status": "called"
+    }
+  }
+}

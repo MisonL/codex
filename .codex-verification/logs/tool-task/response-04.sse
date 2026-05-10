@@ -1,0 +1,24 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp-4"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"web_search_call","id":"web-search-check","status":"completed","action":{"type":"search","query":"Codex harness deterministic web search event"}}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"cron-create","name":"CronCreate","arguments":"{\"schedule\":\"*/10 * * * *\",\"prompt\":\"check deterministic fixture\"}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"cron-list","name":"CronList","arguments":"{}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"cron-delete-missing","name":"CronDelete","arguments":"{\"id\":\"missing-task\"}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"request-user-input-invalid","name":"request_user_input","arguments":"{\"questions\":[{\"id\":\"scope\",\"header\":\"Scope\",\"question\":\"This negative call must fail before waiting.\",\"options\":[]}]}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"write-stdin-negative","name":"write_stdin","arguments":"{\"session_id\":999999,\"chars\":\"\",\"yield_time_ms\":1000}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp-4","usage":{"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}}}
+

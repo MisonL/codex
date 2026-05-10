@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp-2"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"write-stdin-positive","name":"write_stdin","arguments":"{\"session_id\":42614,\"chars\":\"\",\"yield_time_ms\":1000,\"max_output_tokens\":2000}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"patch-parser","name":"apply_patch","input":"*** Begin Patch\n*** Update File: duration_parser.py\n@@\n def parse_duration(value):\n-    match = re.fullmatch(r'\\s*(\\d+)\\s*([smh])\\s*', value)\n-    if not match:\n+    parts = re.findall(r'(\\d+)\\s*([smh])', value)\n+    if not parts:\n         raise ValueError(f'invalid duration: {value!r}')\n-    amount, unit = match.groups()\n-    return int(amount) * UNITS[unit]\n+    consumed = ''.join(f'{amount}{unit}' for amount, unit in parts)\n+    compact = re.sub(r'\\s+', '', value)\n+    if consumed != compact:\n+        raise ValueError(f'invalid duration: {value!r}')\n+    return sum(int(amount) * UNITS[unit] for amount, unit in parts)\n*** End Patch\n"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp-2","usage":{"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}}}
+
