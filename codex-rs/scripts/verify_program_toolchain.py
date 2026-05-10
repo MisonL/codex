@@ -77,8 +77,15 @@ def run_codex_exec(
         PROMPT,
     ]
     env = os.environ.copy()
-    env.update({"CODEX_HOME": str(home), "CODEX_API_KEY": "dummy", "OPENAI_BASE_URL": base_url})
-    return subprocess.run(cmd, text=True, capture_output=True, env=env, timeout=timeout)
+    env.update(
+        {
+            "CODEX_HOME": str(home),
+            "CODEX_API_KEY": "dummy",
+            "OPENAI_API_KEY": "dummy",
+            "OPENAI_BASE_URL": base_url,
+        }
+    )
+    return subprocess.run(cmd, input="", text=True, capture_output=True, env=env, timeout=timeout)
 
 
 def write_run_artifacts(
