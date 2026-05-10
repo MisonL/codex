@@ -100,6 +100,7 @@ mod permissions_messages;
 mod personality;
 mod personality_migration;
 mod plugins;
+mod program_toolchain_harness;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;
